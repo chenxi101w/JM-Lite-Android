@@ -306,12 +306,24 @@ fun ReaderScreen(
             if (i >= 0 && i + 1 < chapters.size) chapters[i + 1].id else null
         }
         var nextWarmed by remember(nextChapterId) { mutableStateOf(false) }
-        LaunchedEffect(totalPages, nextChapterId) {
-            if (totalPages <= 0 || nextChapterId == null) return@LaunchedEffect
+        LaunchedEffect(totalPages) {
+            if (totalPages <= 0) return@LaunchedEffect
             snapshotFlow { listState.firstVisibleItemIndex }
                 .distinctUntilChanged()
                 .collect { idx ->
-                    if (!nextWarmed && idx >= totalPages - 2) {
+                    // ── v1.14.0：章内相邻页预载 ──────────────────────────
+                    // 当前页 +1/+2 喂进 Coil 内存缓存：翻到下一页时直接命中内存，
+                    // 解码不落在滚动帧上（LazyColumn 只保证组合，不保证解码时机）。
+                    for (offset in 1..2) {
+                        val n = idx + offset
+                        if (n < totalPages) {
+                            vm.pages.value[n]?.let { p ->
+                                appCtx.imageLoader.enqueue(fileImageRequest(appCtx, p))
+                            }
+                        }
+                    }
+                    // ── v1.2.3：接近章末预热下一章前 3 张 ──
+                    if (!nextWarmed && nextChapterId != null && idx >= totalPages - 2) {
                         nextWarmed = true   // 每章只预热一次
                         vm.peekNextChapterPaths(bookId, nextChapterId, limit = 3).forEach { p ->
                             appCtx.imageLoader.enqueue(
