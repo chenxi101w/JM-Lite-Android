@@ -1,0 +1,12 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Compose 接管 UI，原生主题仅作无 ActionBar 的壳。
+         窗口背景与状态栏/导航栏颜色一律由 MainActivity 按当前主题在代码中同步，
+         这里把系统栏设透明并开启 windowDrawsSystemBarBackgrounds，
+         避免亮色 App 在切页 / 启动 / 切主题时透出黑色窗口造成闪屏。 -->
+    <style name="Theme.JMComic" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

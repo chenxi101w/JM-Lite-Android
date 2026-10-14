@@ -1,0 +1,41 @@
+# Baseline Profile —— JM 轻量版（v1.2.3）
+#
+# 作用：告诉 ART 在安装时对下列「启动即用」的代码做 AOT 预编译，
+# 避免冷启动阶段大量走解释执行 / JIT 编译。对 Compose 项目收益尤其明显
+# （Compose 的方法调用栈深、类数量大，冷启动极易成为 JIT 瓶颈）。
+#
+# 记法：[HSP]L<类路径>;-><方法><签名>
+#   H = Hot        热方法
+#   S = Startup    启动期执行
+#   P = Post-startup 启动后不久执行
+#   包级通配 `L<package>/**->**(**)` 表示该包下所有类的所有方法
+#
+# 说明：最精准的做法是用 Macrobenchmark 的 BaselineProfileRule 在真机上跑出真实轨迹
+# （需额外建 benchmark 模块 + 真机执行）。这里先给出覆盖主要启动热点的版本：
+# 零额外依赖、随构建自动生效。日后若做 Macrobenchmark，可用生成结果替换本文件。
+
+# ── 应用自身：启动入口 + 数据层（Repository / Room / 预取）──
+HSPLcom/example/jmreader/**->**(**)
+
+# ── Compose 运行时与 UI（首屏渲染，冷启动最重的一块）──
+HSPLandroidx/compose/runtime/**->**(**)
+HSPLandroidx/compose/ui/platform/**->**(**)
+HSPLandroidx/compose/ui/node/**->**(**)
+HSPLandroidx/compose/ui/layout/**->**(**)
+HSPLandroidx/compose/foundation/**->**(**)
+HSPLandroidx/compose/material3/**->**(**)
+HSPLandroidx/compose/animation/**->**(**)
+
+# ── Activity / Lifecycle / Navigation（页面骨架）──
+HSPLandroidx/activity/**->**(**)
+HSPLandroidx/lifecycle/**->**(**)
+HSPLandroidx/navigation/**->**(**)
+
+# ── Room / SQLite：启动即打开数据库、读书架 ──
+HSPLandroidx/room/**->**(**)
+
+# ── Kotlin 协程：启动即用 ──
+HSPLkotlinx/coroutines/**->**(**)
+
+# ── Coil：首屏封面加载 ──
+HSPLcoil/**->**(**)

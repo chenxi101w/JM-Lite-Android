@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v5.0.0 启动图标背景：用户手绘图外框粉色 #FFADCE（与图标粉红主调一致；launcher 形状 mask 内填满） -->
+    <color name="ic_launcher_background">#FFADCE</color>
+</resources>
