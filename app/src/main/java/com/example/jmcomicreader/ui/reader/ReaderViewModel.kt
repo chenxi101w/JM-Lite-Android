@@ -147,6 +147,8 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
             // 整本看完判定只在最后一章生效：避免读中间章节滚到底就误标整本完成
             if (isLastChapter && ((reachedEnd && _autoFinishScroll.value) || reachedPercent)) {
                 repo.markFinished(bookId)
+                // v1.15.0：自动看完同样进回收站宽限期
+                runCatching { repo.markFinishedRecycle(bookId) }
             }
         }
     }
@@ -235,6 +237,8 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
                     repo.saveProgress(bookId, chapterId, 0)
                 }
                 _isFinished.value = runCatching { repo.getBook(bookId)?.finished == 1 }.getOrDefault(false)
+                // v1.15.0：重开已看完的书 = 宽限期续期 7 天（全量版 v7.1.3 语义）
+                if (_isFinished.value) runCatching { repo.renewRecycle(bookId) }
             } catch (e: Exception) {
                 _state.value = UiState.Error(e.message ?: "加载章节失败")
             }
@@ -336,7 +340,12 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
 
     /** 标记整本漫画「已看完」（阅读器底部按钮调用），并同步刷新 isFinished。 */
     fun markFinished(bookId: Int) {
-        viewModelScope.launch { repo.markFinished(bookId); _isFinished.value = true }
+        viewModelScope.launch {
+            repo.markFinished(bookId)
+            // v1.15.0：标看完即进回收站宽限期（7 天没再看删本地，重开续期）
+            runCatching { repo.markFinishedRecycle(bookId) }
+            _isFinished.value = true
+        }
     }
 
     /** 取消「已看完」。 */

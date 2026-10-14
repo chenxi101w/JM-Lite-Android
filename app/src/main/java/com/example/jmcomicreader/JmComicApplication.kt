@@ -70,6 +70,12 @@ class JmComicApplication : Application() {
         // v1.13.0：下载保活 + 通知服务（常驻循环：有活跃下载自动转前台并发通知，无下载时空转）
         startService(android.content.Intent(this, com.example.jmreader.data.download.DownloadService::class.java))
 
+        // v1.15.0：回收站宽限期到期扫描（启动一次；回收站页进入时也会扫）
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { repository.checkRecycleExpiry() }
+                .onFailure { Log.w("JmApp", "checkRecycleExpiry failed", it) }
+        }
+
         // 调试期性能探针：主线程出现磁盘读/网络/慢调用时打栈到 logcat（tag StrictMode），
         // 用于真机定位卡顿根因；release 包不开启，零性能开销。
         if (BuildConfig.DEBUG) {
