@@ -19,13 +19,13 @@ object ThemeState {
     /** 主题模式：system / light / dark / auto。 */
     var theme by mutableStateOf("system")
 
-    /** 主题风格：ink 墨夜沉浸（默认）/ paper 纸感暖橘 / neon 霓虹紫夜。动态取色开启时被忽略。 */
-    var themeStyle by mutableStateOf("ink")
+    /** 主题风格：violet 暮紫极简（默认）/ ink 墨夜 / paper 纸感 / neon 霓虹。动态取色开启时被忽略。 */
+    var themeStyle by mutableStateOf("violet")
 
     /** 定时夜间模式时间段（theme=auto 时生效）。 */
     var nightStart by mutableStateOf("22:00")
     var nightEnd by mutableStateOf("06:00")
 
-    /** Android 12+ 动态取色（Material You）。true 时忽略 themeStyle，跟随壁纸取色。 */
-    var useDynamicColor by mutableStateOf(true)
+    /** Android 12+ 动态取色（Material You）。true 时忽略 themeStyle，跟随壁纸取色。v1.16.0 默认改 false：让暮紫主题默认可见。 */
+    var useDynamicColor by mutableStateOf(false)
 }

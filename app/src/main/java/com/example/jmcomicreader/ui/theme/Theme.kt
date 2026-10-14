@@ -239,6 +239,90 @@ private object Neon {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// ④ 暮紫 · 极简分层（v1.16.0，参考 YOMII 的克制分层哲学 × 紫色主色）
+//    特点：surface 灰阶精细分级（Lowest→Highest 逐级加深）、主色低饱和沉稳紫、
+//    亮色底是微紫灰白而非纯白、暗色底近黑微紫——分层全靠 1~6% 的亮度差撑层次
+// ═══════════════════════════════════════════════════════════════
+private object Violet {
+    val light = lightColorScheme(
+        primary = Color(0xFF5B3FA8),
+        onPrimary = Color(0xFFFFFFFF),
+        primaryContainer = Color(0xFFE9E2FA),
+        onPrimaryContainer = Color(0xFF241457),
+        secondary = Color(0xFF62597B),
+        onSecondary = Color(0xFFFFFFFF),
+        secondaryContainer = Color(0xFFE9E4F5),
+        onSecondaryContainer = Color(0xFF1E1A33),
+        tertiary = Color(0xFF6E6486),
+        onTertiary = Color(0xFFFFFFFF),
+        tertiaryContainer = Color(0xFFE5DFF2),
+        onTertiaryContainer = Color(0xFF241D38),
+        error = Color(0xFFBA1A1A),
+        onError = Color(0xFFFFFFFF),
+        errorContainer = Color(0xFFFFDAD6),
+        onErrorContainer = Color(0xFF410002),
+        background = Color(0xFFF8F7FB),
+        onBackground = Color(0xFF1A1822),
+        surface = Color(0xFFFCFCFE),
+        onSurface = Color(0xFF1A1822),
+        surfaceVariant = Color(0xFFECEAF3),
+        onSurfaceVariant = Color(0xFF5C5868),
+        outline = Color(0xFF8B8798),
+        outlineVariant = Color(0xFFD9D6E4),
+        surfaceDim = Color(0xFFE2E0EA),
+        surfaceBright = Color(0xFFFCFCFE),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        surfaceContainerLow = Color(0xFFF8F7FB),
+        surfaceContainer = Color(0xFFF3F2F8),
+        surfaceContainerHigh = Color(0xFFEEEDF4),
+        surfaceContainerHighest = Color(0xFFE9E8F0),
+        inverseSurface = Color(0xFF2F2D3A),
+        inverseOnSurface = Color(0xFFF1EFF7),
+        inversePrimary = Color(0xFFC9BCFF),
+        scrim = Color(0xFF000000),
+        surfaceTint = Color(0xFF5B3FA8)
+    )
+    val dark = darkColorScheme(
+        primary = Color(0xFFC9BCFF),
+        onPrimary = Color(0xFF2E1A6B),
+        primaryContainer = Color(0xFF442E8C),
+        onPrimaryContainer = Color(0xFFE9E2FA),
+        secondary = Color(0xFFBFB8D4),
+        onSecondary = Color(0xFF2C2740),
+        secondaryContainer = Color(0xFF383352),
+        onSecondaryContainer = Color(0xFFDDD8EE),
+        tertiary = Color(0xFFA99BC8),
+        onTertiary = Color(0xFF332A4A),
+        tertiaryContainer = Color(0xFF3D3654),
+        onTertiaryContainer = Color(0xFFDDD8EE),
+        error = Color(0xFFFFB4AB),
+        onError = Color(0xFF690005),
+        errorContainer = Color(0xFF93000A),
+        onErrorContainer = Color(0xFFFFDAD6),
+        background = Color(0xFF0F0F14),
+        onBackground = Color(0xFFF2F1F7),
+        surface = Color(0xFF16161C),
+        onSurface = Color(0xFFF2F1F7),
+        surfaceVariant = Color(0xFF2B2935),
+        onSurfaceVariant = Color(0xFFC3C0D0),
+        outline = Color(0xFF4A4757),
+        outlineVariant = Color(0xFF2B2935),
+        surfaceDim = Color(0xFF0F0F14),
+        surfaceBright = Color(0xFF2A2A32),
+        surfaceContainerLowest = Color(0xFF0C0C10),
+        surfaceContainerLow = Color(0xFF14141A),
+        surfaceContainer = Color(0xFF191920),
+        surfaceContainerHigh = Color(0xFF1F1F26),
+        surfaceContainerHighest = Color(0xFF25252C),
+        inverseSurface = Color(0xFFF2F1F7),
+        inverseOnSurface = Color(0xFF2F2D3A),
+        inversePrimary = Color(0xFF5B3FA8),
+        scrim = Color(0xFF000000),
+        surfaceTint = Color(0xFFC9BCFF)
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 形状体系（MD3 规范升级）：更圆润柔顺，大圆角 + 微变
 // ═══════════════════════════════════════════════════════════════
 private val JmShapes = Shapes(
@@ -412,13 +496,15 @@ private fun rememberJmTints(dark: Boolean): JmTints {
 val ThemeStyles = listOf(
     "ink" to "墨夜沉浸",
     "paper" to "纸感暖橘",
-    "neon" to "霓虹紫夜"
+    "neon" to "霓虹紫夜",
+    "violet" to "暮紫极简"
 )
 
 /** 按风格 + 明暗取预设配色（仅当动态取色关闭时使用）。 */
 fun themeScheme(style: String, dark: Boolean) = when (style) {
     "paper" -> if (dark) Paper.dark else Paper.light
     "neon" -> if (dark) Neon.dark else Neon.light
+    "violet" -> if (dark) Violet.dark else Violet.light
     else -> if (dark) Ink.dark else Ink.light
 }
 
@@ -434,7 +520,7 @@ fun themeBackground(style: String, useDynamicColor: Boolean, dark: Boolean, ctx:
 @Composable
 fun JMComicTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    style: String = "ink",
+    style: String = "violet",
     useDynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {

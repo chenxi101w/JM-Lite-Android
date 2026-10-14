@@ -137,7 +137,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                                 theme) { vm.setTheme(it) }
                             Divider()
                             ChipRow("主题风格",
-                                listOf("ink" to "墨夜", "paper" to "纸感", "neon" to "霓虹"),
+                                listOf("violet" to "暮紫", "ink" to "墨夜", "paper" to "纸感", "neon" to "霓虹"),
                                 themeStyle) { vm.setThemeStyle(it) }
                             if (theme == "auto") {
                                 Divider()

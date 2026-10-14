@@ -61,12 +61,12 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("jmcomic_prefs", Context.MODE_PRIVATE)
         // ── 从持久化配置初始化全局主题状态 ──
         ThemeState.theme = prefs.getString("theme", "system") ?: "system"
-        ThemeState.themeStyle = prefs.getString("theme_style", "ink") ?: "ink"
+        ThemeState.themeStyle = prefs.getString("theme_style", "violet") ?: "violet"
         ThemeState.nightStart = prefs.getString("night_mode_start", "22:00") ?: "22:00"
         ThemeState.nightEnd = prefs.getString("night_mode_end", "06:00") ?: "06:00"
         // 动态取色：Android 12+ 默认开启，低版本强制关
         ThemeState.useDynamicColor = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            prefs.getBoolean("dynamic_color", true)
+            prefs.getBoolean("dynamic_color", false)
         } else {
             false
         }
