@@ -1,6 +1,16 @@
 ﻿package com.example.jmreader.ui.search
 
 import android.widget.Toast
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -123,14 +133,54 @@ fun SearchBody(
         }
     }
 
+    // ── v1.25.0：搜索栏随滚动收放 ──────────────────────────────────
+    // 需求：「搜索页的搜索栏改成跟人家一样，上滑一下就自动出来」。
+    // 与底部栏/悬浮球同一套做法：内容下滑 → 收起，上滑 → 展开（只认方向、不跟手）。
+    // 用**真实高度动画**（外层 Box 裁切）而不是 graphicsLayer 平移 —— 平移会在收起后
+    // 留下一块空白高度，看起来像「上面少了一块」。网格是 weight(1f)，
+    // 搜索栏收起时它自动填满，视觉上就是内容长大一格。
+    val barDp = 52f
+    val barHeight = remember { Animatable(barDp) }
+    val barDir = remember { mutableIntStateOf(0) }
+    // 无结果时强制常驻（没东西可滚，藏起来等于把搜索入口也弄没了）
+    val forceShow = (state as? UiState.Success)?.data?.isNotEmpty() == false
+    val barConn = remember(forceShow) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset, available: Offset, source: NestedScrollSource
+            ): Offset {
+                if (forceShow) return Offset.Zero
+                val dy = consumed.y
+                if (dy > 6f && barDir.intValue != 1) {
+                    barDir.intValue = 1
+                    scope.launch { barHeight.animateTo(0f, tween(180)) }
+                } else if (dy < -6f && barDir.intValue != -1) {
+                    barDir.intValue = -1
+                    scope.launch { barHeight.animateTo(barDp, tween(180)) }
+                }
+                return Offset.Zero      // ⚠️ 不消费，列表照常滚
+            }
+        }
+    }
+    LaunchedEffect(forceShow) {
+        if (forceShow && barHeight.value != barDp) barHeight.animateTo(barDp, tween(180))
+    }
+
     Column(
         modifier = Modifier
             .padding(padding)
             .fillMaxSize()
+            .nestedScroll(barConn)
     ) {
         // 搜索输入框（回车即搜）
         // v1.1.9：去掉浮动 label（"搜索关键词（标题 / 标签）"这行小字），
         // 改用占位提示 + 压缩高度 + 胶囊圆角 —— 顶部不再显厚重，输入后文字自动消失。
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(with(LocalDensity.current) { barHeight.value.toDp() })
+                .clipToBounds()
+        ) {
         OutlinedTextField(
             value = keyword,
             onValueChange = { vm.setKeyword(it) },
@@ -173,6 +223,8 @@ fun SearchBody(
                 }
             )
         )
+
+        }   // ← 搜索栏高度动画 Box 结束
 
         // 未搜索过：显示引导空态（而不是转圈）
         if (!searched) {
