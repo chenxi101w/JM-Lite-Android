@@ -92,10 +92,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
     private val _autoFinishPercent = MutableStateFlow(90)
     val autoFinishPercent: StateFlow<Int> = _autoFinishPercent.asStateFlow()
 
-    /** 章节读完自动删除本章本地图片（仅删本章，不动整本记录；默认关）。 */
-    private val _autoDeleteChapter = MutableStateFlow(false)
-    val autoDeleteChapter: StateFlow<Boolean> = _autoDeleteChapter.asStateFlow()
-
     /** 沉浸式阅读：滚动时自动隐藏顶栏/进度条/底部按钮（默认开）。 */
     private val _immersiveEnabled = MutableStateFlow(true)
     val immersiveEnabled: StateFlow<Boolean> = _immersiveEnabled.asStateFlow()
@@ -120,7 +116,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
             _autoFinishScroll.value = all["reader_auto_finish_scroll"] == "1"
             _autoFinishPercent.value =
                 all["reader_auto_finish_percent"]?.toIntOrNull()?.coerceIn(1, 100) ?: 90
-            _autoDeleteChapter.value = all["reader_auto_delete_chapter"] == "1"
             _immersiveEnabled.value = all["reader_immersive"] != "0"
             _blackDeletedHandle.value = all["reader_black_deleted_handle"] ?: "none"
         }
@@ -129,7 +124,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
     /**
      * 阅读位置变化回调（滚动监听触发）：
      * 1) 始终把当前章标记为「已读完」（读了几章标几）；
-     * 2) 若开启「读完自动删本章」，不再当场删除——改为退出阅读器后延迟删除（见 onReaderExit），重入同本取消；
      * 3) 仅当**最后一章**满足「滚到底自动看完」或「阅读进度达阈值自动看完」时，标记整本已看完
      *    （4.2.1 修复：此前任何一章滚到底都会 markFinished，导致「没读完就触发整本自动删除」）。
      * 幂等：重复触发不会造成副作用（UPDATE / 目录已删 / finished 覆盖写）。
@@ -193,7 +187,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
      */
     fun loadChapter(photoId: Int, bookId: Int, chapterId: Int) {
         viewModelScope.launch {
-            repo.cancelPendingChapterDelete(bookId) // 重新打开同本：取消其待执行的「读完自动删本章」
             _state.value = UiState.Loading
             _pageRatios.value = emptyMap()   // v1.2.0：换章先清旧尺寸，避免残留比例错位
             try {
@@ -341,17 +334,4 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
         viewModelScope.launch { repo.markUnfinished(bookId); _isFinished.value = false }
     }
 
-    /**
-     * 退出阅读器时由 UI 的 DisposableEffect(onDispose) 调用（v1.0.0 轻量版简化）：
-     * 整本已看完（以 DB 为准）→ 只保留 finished 标记（书架「看完」沉底），**不清本地**——
-     * 轻量版删除 = 手动彻底删除，看完不自动清理、不进回收站。
-     * 若开启「读完自动删本章」，调度延迟删除该本所有已读完章节的本地图片（重入会被取消）。
-     */
-    fun onReaderExit(bookId: Int) {
-        viewModelScope.launch {
-            if (_autoDeleteChapter.value) {
-                repo.scheduleChapterDelete(bookId)
-            }
-        }
-    }
 }

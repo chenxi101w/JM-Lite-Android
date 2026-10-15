@@ -209,10 +209,6 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                                 vm.set("reader_auto_finish_scroll", if (it) "1" else "0")
                             }
                             Divider()
-                            SwitchRow("读完自动删本章", "章节读完后自动删除本地图",
-                                (cfg["reader_auto_delete_chapter"] ?: "0") == "1") {
-                                vm.set("reader_auto_delete_chapter", if (it) "1" else "0")
-                            }
                         }
                     }
                 }
@@ -223,10 +219,6 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                             RowItem("下载管理", "查看进度 / 重试 / 清理") {
                                 nav.navigate(Routes.DOWNLOADS)
                             }
-                            Divider()
-                            ChipRow("下载完成后",
-                                listOf("none" to "保持记录", "hide" to "隐藏记录", "delete" to "删除记录"),
-                                cfg["download_after"] ?: "none") { vm.set("download_after", it) }
                         }
                     }
                     Spacer(Modifier.height(12.dp))

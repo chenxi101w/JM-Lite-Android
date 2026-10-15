@@ -68,7 +68,8 @@ data class Download(
     val total: Int = 0,
     val savedDir: String = "",
     val createdAt: Long = 0,
-    @ColumnInfo(defaultValue = "0") val hidden: Int = 0    // 1 = 下载完成后按设置自动隐藏（download_after=hide）
+    /** v1.18.0：随「隐藏下载记录」功能下线成**遗留列**，无任何读写方；保留仅为免去又一次重写表的迁移。 */
+    @ColumnInfo(defaultValue = "0") val hidden: Int = 0
 )
 
 // ─── 配置 / 历史 ──────────────────────────────────────────────

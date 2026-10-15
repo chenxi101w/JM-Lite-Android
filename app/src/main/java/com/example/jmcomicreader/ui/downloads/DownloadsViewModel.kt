@@ -30,16 +30,15 @@ class DownloadsViewModel(private val repo: JmRepository) : ViewModel() {
      */
     data class Row(val download: Download, val title: String, val local: Boolean)
 
-    /** 是否连「已隐藏」的下载记录一起显示（设置里下载后行为=自动隐藏时会产生隐藏记录）。 */
-    private val _showHidden = MutableStateFlow(false)
-    val showHidden: StateFlow<Boolean> = _showHidden.asStateFlow()
-    fun toggleShowHidden() { _showHidden.value = !_showHidden.value }
-
+    // v1.18.0：删掉「隐藏下载记录」——download_after(hide/delete) 与之配套的
+    // showHidden / hiddenCount / hiddenRows 三个流全部下线（hiddenRows 与设置页的
+    // hiddenDownloadRows 早已是零消费方的孤儿）。DB 的 downloads.hidden 列保留不动，
+    // 避免为删一个无用列再赌一次「重写表」的迁移风险。
     val rows: StateFlow<List<Row>> =
-        combine(repo.observeDownloads(), repo.observeBooks(), _showHidden) { dls, books, showHidden ->
+        combine(repo.observeDownloads(), repo.observeBooks()) { dls, books ->
             // v1.12.0 单表：books 流即账本全量（含已删本地的行），title 兜底/local 全部从行上取
             val bookById = books.associateBy { it.id }
-            dls.filter { showHidden || it.hidden == 0 }
+            dls
                 .map { dl ->
                     val b = bookById[dl.bookId]
                     Row(
@@ -50,30 +49,6 @@ class DownloadsViewModel(private val repo: JmRepository) : ViewModel() {
                 }
                 // v14：三流合并 + 建全表 Map 的开销挪出主线程
         }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    /** 被隐藏的记录数（用于提示「N 条已隐藏」）。 */
-    val hiddenCount: StateFlow<Int> =
-        repo.observeDownloads()
-            .map { list -> list.count { it.hidden == 1 } }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
-
-    /** 仅被隐藏的记录（设置页「被隐藏的下载记录」页面展示，支持删除/清空）。 */
-    val hiddenRows: StateFlow<List<Row>> =
-        combine(repo.observeDownloads(), repo.observeBooks()) { dls, books ->
-            val bookById = books.associateBy { it.id }
-            dls.filter { it.hidden == 1 }
-                .map { dl ->
-                    val b = bookById[dl.bookId]
-                    Row(
-                        dl,
-                        b?.title?.takeIf { it.isNotBlank() } ?: "JM-${dl.bookId}",
-                        local = b != null && b.savedDir.isNotBlank()
-                    )
-                }
-                // v14：计算挪出主线程；且本流仅供设置页「被隐藏的下载记录」使用，
-                // 改 WhileSubscribed(0) 让页面不可见时立刻停止订阅，不再常驻空转。
-        }.flowOn(Dispatchers.Default)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(0), emptyList())
 
     /** 实时下载进度（图片级 done/total + 速度），以 bookId 为键。 */
     private val _progresses = MutableStateFlow<Map<Int, DownloadProgress>>(emptyMap())

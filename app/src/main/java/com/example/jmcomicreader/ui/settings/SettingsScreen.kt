@@ -149,11 +149,9 @@ fun SettingsScreen(nav: NavController, factory: JmViewModelFactory) {
             )
             Spacer(Modifier.height(10.dp))
             GroupCard(
-                title = "下载", desc = "下载管理、完成后处理",
+                title = "下载", desc = "下载管理、并发设置",
                 icon = Icons.Filled.CloudDownload, tint = Color(0xFF10B981),
-                summary = when (cfg["download_after"] ?: "none") {
-                    "hide" -> "隐藏记录"; "delete" -> "删除记录"; else -> "保持记录"
-                },
+                summary = "并发与队列",
                 onClick = { nav.goSettings(Routes.SUB_DOWNLOAD) }
             )
             Spacer(Modifier.height(10.dp))

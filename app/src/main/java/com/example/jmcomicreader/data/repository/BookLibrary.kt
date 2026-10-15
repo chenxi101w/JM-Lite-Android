@@ -42,19 +42,6 @@ class BookLibrary(
         ComicLedger(bookDao)
     }
 
-    // v7.0.0：看完自动删除 + 「不删」标记逻辑搬到 BookAutoDeleteManager。注入真正需要的 dao / 回调，
-    // 其中 deleteFinishedChapters（删已读完章节图）仍由本类持有，以回调注入避免反向依赖造成循环引用。
-    private val autoDelete by lazy {
-        BookAutoDeleteManager(
-            configProvider = configProvider,
-            saveDir = saveDir,
-            bookDao = bookDao,
-            canceller = canceller,
-            onDetailInvalidated = onDetailInvalidated,
-            deleteFinishedChaptersFn = { deleteFinishedChapters(it) }
-        )
-    }
-
     // ── 在线抓取 ──────────────────────────────────────────────
 
     /**
@@ -255,7 +242,7 @@ class BookLibrary(
      * 下载记录供「下载管理/重新下载」查阅，阅读记忆在重新下载后恢复续读。
      */
     suspend fun removeBook(book: Book) {
-        autoDelete.deleteBookFiles(book.id)
+        deleteBookFiles(book.id)
         bookDao.get(book.id)?.let { bookDao.upsert(it.copy(savedDir = "", cached = 0)) }
         chapterDao.delete(book.id)
         onDetailInvalidated(book.id)
@@ -263,7 +250,7 @@ class BookLibrary(
 
     /** 按 id 删除本地内容（行不存在则只清文件）。语义同 [removeBook]。 */
     suspend fun removeBook(bookId: Int) {
-        autoDelete.deleteBookFiles(bookId)
+        deleteBookFiles(bookId)
         bookDao.get(bookId)?.let { bookDao.upsert(it.copy(savedDir = "", cached = 0)) }
         onDetailInvalidated(bookId)
         chapterDao.delete(bookId)
@@ -276,7 +263,7 @@ class BookLibrary(
      * 但回收站标记清零（条目从回收站消失）。
      */
     suspend fun removeBookCompletely(bookId: Int) {
-        autoDelete.deleteBookFiles(bookId)
+        deleteBookFiles(bookId)
         onDetailInvalidated(bookId)
         chapterDao.delete(bookId)
         downloadDao.delete(bookId)
@@ -325,14 +312,6 @@ class BookLibrary(
                 }.getOrDefault(0L)
             }
     }
-
-    // ── 读完自动删本章（4.2.4，v7.1.0 保留；整本「看完自动删除」已由回收站取代）──
-
-    /** 退出阅读器时调用：若开启「读完自动删本章」，延迟后删除该本所有已读完章节的本地图片；重入会先取消旧的。实现已搬到 BookAutoDeleteManager，此处仅转发，签名不变。 */
-    fun scheduleChapterDelete(bookId: Int) = autoDelete.scheduleChapterDelete(bookId)
-
-    /** 重新打开某本漫画时调用：取消其待执行的章节自动删除（重入即取消）。实现已搬到 BookAutoDeleteManager，此处仅转发，签名不变。 */
-    fun cancelPendingChapterDelete(bookId: Int) = autoDelete.cancelPendingChapterDelete(bookId)
 
     suspend fun saveProgress(bookId: Int, chapterId: Int, pageIndex: Int) {
         // v1.12.0：阅读记忆并入账本行（原 read_progress 表退役）。行缺失先兜底落行。
@@ -415,31 +394,20 @@ class BookLibrary(
     suspend fun countFinishedChapters(bookId: Int): Int = chapterDao.countFinished(bookId)
 
     /**
-     * 删除单个章节的本地图片（读完自动删章用）：只删 savedDir/%03d 子目录，不动整本下载记录。
-     * 未下载（savedDir 为空）或章节不在本地时无操作。
+     * 删除某本漫画的本地图片目录与进度文件（删除本地/彻底删除共用）。
+     *
+     * v1.18.0：从 `BookAutoDeleteManager` 并入本类 —— 该类「读完自动删本章」主体已下线，
+     * 只剩这一个方法还在用，为一个函数单开一个管理器不值得，故直接内联。
+     * **先取消在跑的下载**再删目录：否则下载协程会把刚删掉的目录重新写出来，
+     * 表现为「删了又回来」（这条保护原先写在已无调用方的 deleteLocalKeepBook 里，形同失效）。
      */
-    suspend fun deleteChapter(bookId: Int, chapterId: Int) {
-        val book = bookDao.get(bookId) ?: return
-        if (book.savedDir.isBlank()) return
-        val chapter = chapterDao.get(bookId).firstOrNull { it.id == chapterId } ?: return
-        val dir = File(book.savedDir, "%03d".format(chapter.sort))
-        runCatching { dir.deleteRecursively() }
-    }
-
-    /**
-     * 删除某本所有「已读完」章节的本地图片（读完自动删本章用）：只删 savedDir/%03d 子目录，不动整本下载记录。
-     * 未下载（savedDir 为空）或无已读完章节时无操作。
-     */
-    suspend fun deleteFinishedChapters(bookId: Int) {
-        val book = bookDao.get(bookId) ?: return
-        if (book.savedDir.isBlank()) return
-        val finished = chapterDao.get(bookId).filter { it.finished == 1 }
-        if (finished.isEmpty()) return
+    private suspend fun deleteBookFiles(bookId: Int) {
+        runCatching { canceller(bookId) }
         withContext(Dispatchers.IO) {
-            for (ch in finished) {
-                val dir = File(book.savedDir, "%03d".format(ch.sort))
-                runCatching { dir.deleteRecursively() }
-            }
+            val albumDir = File(saveDir, bookId.toString())
+            if (albumDir.exists()) albumDir.deleteRecursively()
+            val progFile = File(saveDir, ".jm_progress" + File.separator + "$bookId.json")
+            if (progFile.exists()) progFile.delete()
         }
     }
 

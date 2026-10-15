@@ -2,7 +2,6 @@
 
 import android.util.Log
 import com.example.jmreader.data.api.JmApiClient
-import com.example.jmreader.data.image.ImageScrambler
 import com.example.jmreader.data.image.NativeAlbumDownloader
 import com.example.jmreader.data.local.AppDatabase
 import com.example.jmreader.data.local.Book
@@ -44,7 +43,7 @@ data class DownloadProgress(
  * 从 JmRepository 拆出。
  *
  * @param saveDir 下载落盘目录
- * @param configProvider 读取配置（download_after 等），由门面注入避免循环依赖
+ * @param configProvider 读取配置（并发数等），由门面注入避免循环依赖
  * @param onDetailInvalidated 详情内存缓存失效回调（下载完成后 savedDir 变更需失效）
  */
 class DownloadManager(
@@ -330,12 +329,6 @@ class DownloadManager(
      * 旧架构这一步要靠 watchdog 每 5 秒轮询兜底。
      */
     private suspend fun runDownload(albumId: Int) {
-        // v1.7.0：重新入队时重置重试计数与停滞检测，
-        // 否则 watchdog 重试超限后 `autoRetry` 残留，用户手动点「继续下载」
-        // 后只要再卡一次就又标 FAILED。
-        autoRetry.remove(albumId)
-        clearStalled(albumId)
-        autoRetrying.remove(albumId)
         // v1.16.1：本协程自己的 Job —— finally 摘 active 时做身份校验。
         // cancelDownload / 强制重下是「先摘 entry 再 cancel」，旧任务的迟到 finally
         // 若无条件 remove，会把同书**新任务**的 entry 一起摘掉 → 新任务脱离监控 →
@@ -383,8 +376,6 @@ class DownloadManager(
             when (val r = nativeDownloader.download(albumId, File(saveDir), detail.second, detail.first)) {
                 is NativeAlbumDownloader.Outcome.Success -> {
                     Log.i("DownloadManager", "原生下载成功：$albumId，共 ${r.images} 张 / ${r.chapters} 章")
-                    // v1.6.9：本本完成 → 清停滞检测状态并重置重试计数
-                    clearStalled(albumId); autoRetry.remove(albumId)
                     // ⚠️ savedDir 必须是 `{root}/{albumId}`（与 Python 版一致）——
                     // 传根目录会让书里记录的路径少一层，表现为"下载完但打不开"。
                     finishDownload(albumId, File(saveDir, albumId.toString()).absolutePath, r.chapters, detail.first, detail.second)
@@ -393,7 +384,6 @@ class DownloadManager(
                 is NativeAlbumDownloader.Outcome.Failed -> {
                     // 不再回退：如实标失败，让用户在下载管理里看到并可重试
                     Log.w("DownloadManager", "下载失败：${r.reason}")
-                    clearStalled(albumId)
                     runCatching { downloadDao.upsert(Download(bookId = albumId, status = "FAILED", createdAt = System.currentTimeMillis())) }
                     return
                 }
@@ -492,8 +482,6 @@ class DownloadManager(
             }
             else Log.w("DownloadManager", "章节落库跳过：无任何章节目录（$albumId）")
             onDetailInvalidated(albumId)   // 详情内存缓存里的 savedDir 已过期（否则详情页仍显示「未下载」）
-            // 下载完成后按设置处理下载记录：none 不处理 / hide 隐藏 / delete 删除记录（保留本地与书架）
-            applyDownloadAfter(albumId)
     }
 
     /**
@@ -512,29 +500,11 @@ class DownloadManager(
             // v6.0.3：纠正路径同样刷新 addedAt，保证「下载时间」排序一致
             runCatching { bookDao.get(albumId)?.let { bookDao.upsert(it.copy(savedDir = savedDir, addedAt = System.currentTimeMillis())) } }
             onDetailInvalidated(albumId)
-            // 纠正为完成后同样应用「下载后行为」
-            applyDownloadAfter(albumId)
         }
     }
 
     // ── v1.12.0 单表：原 onDownloaded（落 comic_status 快照 + 置 LOCAL|DOWNLOADED 位）退役——
     // 下载完成时账本行已由上面的 upsert 写好 localDir（行即状态），无独立登记表可写。
-
-    /**
-     * 下载完成后对下载记录的处理（配置 download_after）：
-     * - none：不处理（留在下载管理）
-     * - hide：标记隐藏（hidden=1，下载管理列表过滤掉，但记录保留）
-     * - delete：删除下载记录（保留本地漫画与书架，仅移除下载管理里的条目）
-     */
-    private suspend fun applyDownloadAfter(albumId: Int) {
-        val mode = configProvider("download_after") ?: "none"
-        if (mode == "none") return
-        val dl = downloadDao.get(albumId) ?: return
-        when (mode) {
-            "hide" -> downloadDao.upsert(dl.copy(hidden = 1))
-            "delete" -> downloadDao.delete(albumId)   // 仅删下载记录，本地文件与书架(book.savedDir)保留
-        }
-    }
 
     /**
      * 取消某本漫画的整本下载（v1.4.0：原生链路）。
@@ -627,83 +597,14 @@ class DownloadManager(
         }.getOrDefault(DownloadProgress("NOT_FOUND", 0, 0, 0, 0f, 0L))
     }
 
-    // ── 卡死检测 + 自动续传重下（v6.0.8） ─────────────────────────
-    // 原理：每下完一张图会更新 .jm_progress/{albumId}.json（mtime），
-    // 长时间无更新 = 下载卡死（网络挂起 / 任务死）。watchdog 每 5s 扫描一次
-    // 所有 DOWNLOADING 的下载：卡死则取消（保留已下载内容）并自动重下，
-    // 重下时会跳过已存在图片 → 断点续传只补缺失，不浪费流量。
-    //
-    // ── v1.6.8 大幅放宽阈值（原 90s 误杀真下载）────────────────────
-    // 真机实测：789 张的一本要 ~90 秒（约 8.8 张/秒），而 777 张那本**每章都在
-    // 遇到慢域名 / HTTP 502 重试**（日志实测 photo=1445341 连撞两个域名），
-    // 进度文件会间歇性超过 90 秒不更新 → 被误判"卡死" → 取消 + 重下。
-    // 重试 4 次（4×90s ≈ 6 分钟）后直接标 FAILED —— 表现就是用户说的
-    //「下载还是下不了」，**但其实它一直在正常下**（实测已下 565/777）。
-    //
-    // 现在阈值放宽到 **5 分钟**，并把重试上限提到 8 次：
-    // 真正的卡死（协程死掉）依然会被抓到，但慢网络不再被误杀。
-    private val STUCK_THRESHOLD_MS = 5 * 60_000L
-
-    /** 自动重试次数上限（v1.2.5: 2→4；v1.6.8: 4→8，配合放宽后的 5 分钟阈值）。 */
-    private val MAX_AUTO_RETRY = 8
-
-    /** 排队记录卡住的判定阈值：无任何在下载任务、且排队已超此时长 → 重新入队（v1.2.5）。 */
-    private val QUEUE_STUCK_MS = 60_000L
-
-    private val autoRetry = ConcurrentHashMap<Int, Int>()
-    private val autoRetrying = ConcurrentHashMap.newKeySet<Int>()
-
-    // ── v1.6.9 停滞检测（字节数判据）──────────────────────────────
-    /** 每本上次看到的已下载字节数（用于判断"是否还在推进"）。 */
-    private val stalledBytes = ConcurrentHashMap<Int, Long>()
-    /**
-     * 每本上次看到的进度文件 mtime（v1.8.6）。
-     *
-     * 补上它是因为**章节清单拉取阶段不产生任何图片字节** ——
-     * 那段时间"零字节增长"是正常的（真机实测 43 章要 55.5 秒），
-     * 光看字节数必然误判卡死。下载器每拉完一章 touch 一次进度文件，
-     * mtime 变化即视为「仍在推进」。
-     */
-    private val stalledMtime = ConcurrentHashMap<Int, Long>()
-    /** 每本"字节数最后一次变化"的时刻，用于算停滞时长。 */
-    private val stalledSince = ConcurrentHashMap<Int, Long>()
-
-    /** 清掉一本的停滞检测状态（v1.8.6 提取，避免漏清 stalledMtime）。 */
-    private fun clearStalled(albumId: Int) {
-        stalledBytes.remove(albumId)
-        stalledMtime.remove(albumId)
-        stalledSince.remove(albumId)
-    }
-
-    /**
-     * 停滞阈值（v1.6.9 定为 10s → v1.8.4 放宽到 30s → **现值 60s**，v1.16.1 校对注释）。
-     *
-     * 为什么必须放宽：10 秒是按「8.8 张/秒、单张 100KB」估的，但那只在**下载已经
-     * 跑起来**之后成立。真实流程里每本开始前都要先把所有章节的图片清单拉回来
-     * （`/chapter`，scramble_id 缺失时还要再打 `/chapter_view_template`）——
-     * 这一段**一张图都没在下**，字节数必然零增长；30 章串行就是十几秒。
-     * 结果：预热期被判成「卡死」→ 取消 → 重下 → 又预热 → 再被判……
-     * 这就是用户说的「下载速度时好时坏」的真正机制。
-     *
-     * v1.8.4 已把章节清单改成并发拉取（见 `NativeAlbumDownloader.fetchChapterPlans`），
-     * 预热成本降到 1~2 秒；但弱网 / 章节特别多时仍可能超过 10 秒，
-     * 因此阈值一并放宽到 30 秒；v1.8.6 又加了 mtime 活动信号后最终定为 **60 秒**
-     * （仍远快于图片取图最坏 5 域名 × 23s 的回退链，真卡死照样能兜住）。
-     */
-    private val STALL_RESET_MS = 60_000L
-
-    /** watchdog 扫描间隔（v1.6.9：30s → 5s，配合 60 秒停滞判据及时发现）。 */
-    private val WATCHDOG_INTERVAL_MS = 5_000L
-
-    /** 启动卡死检测 watchdog（App 启动即扫描，每 5s 一次）。 */
-    fun startStuckWatchdog() {
-        scope.launch {
-            while (true) {
-                delay(WATCHDOG_INTERVAL_MS)
-                runCatching { checkStuckDownloads() }
-            }
-        }
-    }
+    // ── v1.18.0：运行时看门狗已移除 ────────────────────────────────
+    // 原「卡死检测 + 自动续传重下」（v6.0.8 起，5s 一轮扫全部 DOWNLOADING、
+    // 60s 无进展就取消重下、最多自动重试 8 次）整块删除，约 250 行。
+    // 删的理由：① 它误杀过真下载（代码注释自认「重试 4 次后标 FAILED，
+    // 但其实它一直在正常下」）；② 每 5 秒读进度文件 + 查库，对轻量版是纯负担；
+    // ③ 用户要的是「轻」，卡死手动重下即可（下载页有「⟳ 继续下载」）。
+    // **启动续传 [resumePendingDownloads] 保留** —— 那是可感知的能力：
+    // 退出 App 后未完成的下载下次启动会自动接着下。
 
     /**
      * App 启动时恢复未完成的下载（v6.0.19，v1.6.7 加首帧延迟）。
@@ -736,7 +637,7 @@ class DownloadManager(
             // ── v1.7.0 改为「扫进度文件」而非只查 DB ──────────────────────
             // 旧实现只查 downloads 表的 DOWNLOADING/QUEUED，漏掉两种真实情况：
             //   ① watchdog 重试超限后把记录标成 FAILED → 不在恢复列表 → 永不续传；
-            //   ② `download_after=delete` 设置会在完成后删记录，中途被杀时记录也没了。
+            //   ② 用户手动「清空下载历史」后记录就没了。
             // 而**进度文件 `.jm_progress/{albumId}.json` 才是"下到哪了"的真源**，
             // 它一定在磁盘上。改为：扫目录里所有 `status != DONE` 且 `done < total` 的 id。
             val byProgress = scanUnfinishedFromProgressFiles()
@@ -752,172 +653,11 @@ class DownloadManager(
     }
 
 
-    private suspend fun checkStuckDownloads() {
-        val now = System.currentTimeMillis()
-        val all = downloadDao.observeAll().first()
-
-        // ── ① v1.2.5：排队记录卡住 → 重新入队 ──────────────────────────
-        // 场景：任务已写 QUEUED 记录，但**不在队列结构里**（旧版本遗留 / 旧架构的
-        // Semaphore 泄漏年代产物）。v2.0 新架构下队列是显式管理的，正常不会再出现，
-        // 这段保留作为**跨版本升级的兜底**。
-        // 判据：QUEUED 记录 + 不在 pending/active 队列里 + 无任何在下载任务
-        // —— 否则正常排队（前面还有书在下）会被误判。
-        // v1.16.1：anyActive 必须要求「记录确实在队列里」。陈旧 DOWNLOADING 记录
-        // （杀进程残留 / 幽灵写入）会让 anyActive 永远为 true，把下面 limbo QUEUED
-        // 书的救援**永久**挡住 —— 用户看到「排队中」永远不动，只有重启或重下能好。
-        val anyActive = all.any {
-            it.status == "DOWNLOADING" && (active.containsKey(it.bookId) || pending.contains(it.bookId))
-        }
-        if (!anyActive) {
-            for (dl in all) {
-                if (dl.status != "QUEUED") continue
-                if (now - dl.createdAt <= QUEUE_STUCK_MS) continue   // 才刚入队，给它排队的耐心
-                if (pending.contains(dl.bookId) || active.containsKey(dl.bookId)) continue
-                if (autoRetrying.contains(dl.bookId)) continue
-                autoRetrying.add(dl.bookId)
-                scope.launch {
-                    try {
-                        enqueue(dl.bookId)
-                    } catch (_: Exception) {
-                    } finally {
-                        autoRetrying.remove(dl.bookId)
-                    }
-                }
-            }
-        }
-
-        // ── ② 下载中但长时间无进度 → 取消后断点续下（Python 侧跳过已存在图片）──
-        for (dl in all) {
-            if (dl.status != "DOWNLOADING") continue
-            val p = getDownloadProgress(dl.bookId)
-            // v1.2.5：原判据是 `p.status != "DOWNLOADING" || p.mtime <= 0` 就跳过 ——
-            // 于是「刚开下就卡住、连进度文件都没来得及写出来」的任务永远轮不到 watchdog。
-            // 现在改为：
-            //   · 进度文件说已完成 → 说明落库没跟上，直接把记录纠正为 DONE；
-            //   · 进度文件读不到 → 退回用记录创建时间兜底判断，而不是直接放过。
-            if (p.status == "DONE") {
-                runCatching { reconcileDownloadStatus(dl.bookId, "DONE") }
-                continue
-            }
-
-            // ── v1.6.9 改判据：**60 秒内下载字节数没增长 → 自动续下**────────
-            // 旧判据只看 `mtime`（每张图后写一次），阈值 5 分钟 ——
-            //   结果：某张图卡住时界面显示「下载中 · 0 B/s」，用户既看不到
-            //   也没法操作，只能干等 5 分钟（实测用户反馈"下不了"）。
-            //
-            // 新判据更直接：**比字节数**（阈值沿 STALL_RESET_MS = 60s）。
-            //   · `stalled[bookId]` 记下"上次看到的字节数 + 那时的时刻"；
-            //   · 每轮扫描若`now - 记录时刻 >= 60s` 且**字节数与上次完全相同**
-            //     → 判定为「真的没在动」→ 立即取消并断点续下；
-            //   · 字节数变了 → 说明在推进，把记录刷新。
-            // 60 秒足够判定"卡死"：真机上正常速度是 8.8 张/秒，
-            // 单张图（~100KB）1 秒内就完成，绝不会 60 秒毫无进展。
-            // ── v1.8.6：活动信号从「只看字节数」改为「字节数 or 进度文件 mtime」──
-            // 为什么必须加 mtime：**章节清单拉取阶段根本不产生图片字节**，
-            // 「几十秒零字节增长」是这一阶段的**正常状态**。
-            // 真机实测 43 章并发拉取要 55.5 秒 → 只看字节数必然误判卡死 → 取消 → 重下 → 又 55 秒。
-            // 现在下载器每拉完一章就 touch 一次进度文件（`NativeAlbumDownloader.touchProgress`），
-            // mtime 变了就说明还在推进。
-            //
-            // 安全性：touch 绑定在「真有一章拉回来了」上 ——
-            // 网络真挂起时一章也拿不到，mtime 不会变，照样能判出卡死。
-            val lastBytes = stalledBytes[dl.bookId]
-            val lastMtime = stalledMtime[dl.bookId]
-            if (lastBytes == null || lastMtime == null ||
-                p.bytes != lastBytes || p.mtime != lastMtime
-            ) {
-                // 有进展（或首次见到）→ 刷新记录
-                stalledBytes[dl.bookId] = p.bytes
-                stalledMtime[dl.bookId] = p.mtime
-                stalledSince[dl.bookId] = now
-                continue
-            }
-            val stuckSince = stalledSince[dl.bookId] ?: now
-            if (now - stuckSince < STALL_RESET_MS) continue      // 还在观察期内
-            // 字节数（含 mtime 活动信号）60 秒内零变化 = 真卡死
-            Log.w("DownloadManager", "下载停滞 ${now - stuckSince}ms（${dl.bookId}, bytes=${p.bytes}），自动续下")
-
-            if (autoRetrying.contains(dl.bookId)) continue      // 已在自动续传中，跳过
-            clearStalled(dl.bookId)
-            val tries = autoRetry.getOrDefault(dl.bookId, 0)
-            if (tries >= MAX_AUTO_RETRY) {
-                // 自动重试超限：标 FAILED 交给用户。下载管理里该记录带「⟳ 继续下载」按钮，
-                // 用户可随时手动续下（已下部分保留），不会丢进度。
-                autoRetry.remove(dl.bookId)
-                runCatching { reconcileDownloadStatus(dl.bookId, "FAILED") }
-                continue
-            }
-            autoRetry[dl.bookId] = tries + 1
-            autoRetrying.add(dl.bookId)
-            runCatching { cancelDownload(dl.bookId) }   // 保留已下载内容（断点续传靠它）
-            // 退避等待 —— 避免网络刚断时连续快速重试（同时给协程 cancel 留时间）
-            delay(minOf(3_000L shl tries, 15_000L))
-            scope.launch {
-                try {
-                    downloadAlbum(dl.bookId)            // 重下，已存在图片自动跳过
-                } catch (_: Exception) {
-                    // 重下失败（网络仍异常）：保持 DOWNLOADING，留给下轮 watchdog
-                } finally {
-                    autoRetrying.remove(dl.bookId)
-                }
-            }
-        }
-    }
-
-    /**
-     * 启动时**自动修复「旧解扰算法」写出的整本图片**（v1.7.7）。
-     *
-     * 背景：v1.7.3 修掉了 `ImageScrambler.decode` 的「余数块放反」问题，
-     * 但**磁盘上已有的图片是旧算法写的，不会自己变好** —— 用户表现为
-     * 「阅读时好几页叠在一起」。这里在启动后扫一遍下载根目录，
-     * 把 `.jm_ver` 缺失或低于当前 [ImageScrambler.ALGO_VERSION] 的专辑**自动排队重下**。
-     *
-     * 安全性：
-     *  - 只有**确实存在图片文件**的目录才入队（空目录不管）；
-     *  - 重下完成后写入新的 `.jm_ver` → **不会反复触发**；
-     *  - 走 `enqueueAlbums`（书本级并发 2 的温和队列），不会一次性打爆网络；
-     *  - 延迟 6 秒，避开冷启动时接口线路还在预热的阶段。
-     */
-    fun healLegacyImages() {
-        scope.launch {
-            delay(6_000)
-            val need = runCatching {
-                val root = File(saveDir)
-                (root.listFiles() ?: emptyArray())
-                    .filter { it.isDirectory && !it.name.startsWith(".") }
-                    .mapNotNull { d ->
-                        val id = d.name.toIntOrNull() ?: return@mapNotNull null
-                        val ver = runCatching {
-                            File(d, ImageScrambler.VER_MARKER).readText().trim().toInt()
-                        }.getOrDefault(0)
-                        if (ver >= ImageScrambler.ALGO_VERSION) return@mapNotNull null
-                        val hasImage = d.listFiles()?.any { sub ->
-                            sub.isDirectory && sub.listFiles()?.any { f ->
-                                f.isFile && f.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp")
-                            } == true
-                        } == true
-                        if (!hasImage) return@mapNotNull null
-                        // ── v1.9.0：**只有多章的书需要重下** ──────────────
-                        // 54 版修的是「num 的 aid 传错成 albumId」。
-                        // 单行本的 albumId == photoId，**本来就算对的**，
-                        // 让它跟着重下纯属浪费流量（用户手机上 1.4GB）。
-                        // 多章 = 有 2 个及以上章节目录。
-                        val chapterDirs = d.listFiles()?.count { it.isDirectory } ?: 0
-                        if (chapterDirs <= 1) return@mapNotNull null
-                        id
-                    }
-            }.getOrDefault(emptyList())
-            if (need.isEmpty()) return@launch
-            Log.i(TAG, "老图自愈：${need.size} 本需按新解扰算法重下 → $need")
-            enqueueAlbums(need)
-        }
-    }
-
     /**
      * 扫 `.jm_progress` 目录里的进度文件，返回**未下完**的专辑 id 列表（v1.7.0）。
      *
      * 判据：status不是 DONE/NOT_FOUND，且 done < total。
-     * 进度文件才是"下到哪了"的真源 —— DB 记录可能被清理（download_after=delete），
+     * 进度文件才是"下到哪了"的真源 —— DB 记录可能被用户清理掉，
      * 或被 watchdog 标成 FAILED 而不在恢复列表里，但进度文件一定还在磁盘上。
      */
     private fun scanUnfinishedFromProgressFiles(): List<Int> {

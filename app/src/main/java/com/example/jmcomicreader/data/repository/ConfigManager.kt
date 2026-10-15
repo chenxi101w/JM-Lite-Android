@@ -22,7 +22,6 @@ class ConfigManager(
         // 我们按「每本一份」的结构取 16，× 2 本 = 32，与官方同量级。
         "max_concurrent_downloads" to "24",
         "book_download_concurrency" to "2",
-        "image_quality" to "original",
         "search_result_limit" to "80",
         "search_priority" to "input",
         "hide_page_chapter" to "false",
@@ -34,7 +33,6 @@ class ConfigManager(
         "bookshelf_columns" to "0",
         "search_columns" to "0",   // 搜索结果每行列数（0=默认3列；v6.0.20 新增）
         // ── 1.6.0 新增 ──
-        "download_after" to "none",      // 下载完成后对下载记录的处理：none 不处理 / hide 隐藏 / delete 删除记录
         // 4.3.1：open_directly 已移除——点漫画（主页/搜索/书架）统一直接进阅读器，详情从阅读器右上角进
         // ── 2.0.0 新增 ──
         "hide_downloaded_in_search" to "hide", // 搜索里已下载漫画：off 不处理 / hide 彻底隐藏 / gray 灰显可点
@@ -47,8 +45,6 @@ class ConfigManager(
         // ── v7 读完设置 ──
         "reader_auto_finish_scroll" to "0",    // 滚到最后一张图自动标记整本看完（默认关）
         "reader_auto_finish_percent" to "90",  // 阅读进度达该百分比自动算看完（1~100）
-        "reader_auto_delete_chapter" to "0",   // 章节读完自动删除本章本地图片（默认关）
-        "reader_auto_delete_chapter_delay" to "30", // 读完自动删本章的宽限期（秒）：退出阅读器后延迟删除，重入同本取消
         // v1.17.0 轻量化：整本「看完自动删除」机制随回收站下线；喜欢/讨厌标签体系、无关标签、
         // 智能关联（同义词展开 + 喜欢加权排序）、订阅新作自动下载的默认配置键一并移除。
         // 数据库里已写入的旧键是惰性残留（无读取方），不主动清——留着不影响运行。

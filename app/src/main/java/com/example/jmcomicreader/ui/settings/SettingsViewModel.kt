@@ -12,26 +12,12 @@ import com.example.jmreader.util.AppIconManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class SettingsViewModel(
     private val repo: JmRepository,
     context: Context
 ) : ViewModel() {
-
-    /** 被隐藏的下载记录（hidden=1），设置页「被隐藏的下载记录」页面展示。 */
-    data class HiddenDownloadRow(val bookId: Int, val title: String)
-
-    val hiddenDownloadRows: StateFlow<List<HiddenDownloadRow>> =
-        combine(repo.observeDownloads(), repo.observeBooks()) { dls, books ->
-            val titleMap = books.associate { it.id to it.title }
-            dls.filter { it.hidden == 1 }
-                .map { HiddenDownloadRow(it.bookId, titleMap[it.bookId] ?: "JM-${it.bookId}") }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun deleteDownloadRecord(bookId: Int) {
         viewModelScope.launch { runCatching { repo.deleteDownloadRecord(bookId) } }
@@ -66,20 +52,17 @@ class SettingsViewModel(
     }
 
     val keys = listOf(
-        "max_concurrent_downloads", "image_quality",
+        "max_concurrent_downloads",
         "search_result_limit", "search_tag_limit", "reader_chapter_toast",
         "hide_page_chapter", "search_priority", "default_sort",
         "search_bar_behavior", "reader_pages_per_screen", "bookshelf_columns",
-        // 1.6.0 新增：下载后行为（open_directly 4.3.1 起移除，卡片统一直接阅读）
-        "download_after",
         // 2.0.0 新增：搜索已下载屏蔽 / 进度滑轨颜色 / 书架排序 / 看完沉底
         "hide_downloaded_in_search", "reader_progress_color",
         "library_sort", "library_unfinished_first",
         // v5 新增：看完漫画处理
         "hide_finished_in_search", "finished_in_library",
         // v7 读完设置
-        "reader_auto_finish_scroll", "reader_auto_finish_percent", "reader_auto_delete_chapter",
-        "reader_auto_delete_chapter_delay",
+        "reader_auto_finish_scroll", "reader_auto_finish_percent",
         // 3.0.0 看完自动删除整本本地内容（延迟+重入取消）——v7.1.0 已由回收站机制取代（配置移除）
         // 4.3.1 阅读器「不删」按钮后续策略——v7.1.0 移除（配置移除）
         // v1.10.0 云同步（JmSyncManager）

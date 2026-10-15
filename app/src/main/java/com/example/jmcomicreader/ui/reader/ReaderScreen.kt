@@ -64,7 +64,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -149,11 +148,6 @@ fun ReaderScreen(
     var showMenu by remember { mutableStateOf(false) }
     // 下载完成后的询问：「下载完成，是否删除这本漫画的本地内容？」（v5.3.0）
     var askDeleteAfterDownload by remember { mutableStateOf(false) }
-    // 翻章标记（4.2.2 修复）：goTo 会销毁当前阅读器页面（nav.navigate + popUpTo inclusive），
-    // 若 onDispose 因此触发 onReaderExit，会把「翻章」误判成「退出」→ 读完最后一章后翻上一章
-    // 也会调度看完自动删除 → 60 秒后本地被删、你还在读上一章就白屏。
-    // 切章时置位，onDispose 看到该标记则跳过自动删除调度；真正退出（返回/返回手势）才触发。
-    var switchingChapter by remember { mutableStateOf(false) }
     // 沉浸式阅读：默认进入沉浸态（UI 隐藏），点击画面最上方区域唤起（v4.14.0）
     var immersive by remember { mutableStateOf(true) }
 
@@ -171,10 +165,6 @@ fun ReaderScreen(
     LaunchedEffect(askDeleteAfterDownload) {
         if (askDeleteAfterDownload) { delay(10000); askDeleteAfterDownload = false }
     }
-    // 退出阅读器（页面销毁）时：若开启「看完自动删除」且整本已看完，调度延迟删除本地内容（P0-2）。
-    // 4.2.2：goTo 翻章也会销毁本页（nav.navigate + popUpTo inclusive），但那是「切章」不是「退出」——
-    // 切章时 switchingChapter 已置位，跳过调度，避免读完最后一章翻上一章误删本地。
-    DisposableEffect(Unit) { onDispose { if (!switchingChapter) vm.onReaderExit(bookId) } }
     LaunchedEffect(jumpTo) {
         jumpTo?.let { listState.scrollToItem(it); jumpTo = null }
     }
@@ -228,7 +218,6 @@ fun ReaderScreen(
     val next = chapters.getOrNull(currentIdx + 1)
 
     fun goTo(chapterIdNext: Int) {
-        switchingChapter = true
         nav.navigate(Routes.reader(bookId, chapterIdNext, chapterIdNext)) {
             popUpTo(Routes.READER) { inclusive = true }
         }

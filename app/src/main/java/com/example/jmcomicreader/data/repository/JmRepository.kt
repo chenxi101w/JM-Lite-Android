@@ -77,9 +77,9 @@ class JmRepository(
         configProvider = { config.getConfig(it) },
         onDetailInvalidated = ::invalidateDetail
     ).also {
-        it.startStuckWatchdog()
-        it.resumePendingDownloads()   // v6.0.19：启动自动恢复上次未完成的下载（断点续传）
-        it.healLegacyImages()         // v1.7.7：自动重下「旧解扰算法」写出的整本图片
+        // v1.18.0：startStuckWatchdog（运行时看门狗）与 healLegacyImages（旧解扰图一次性重下）
+        // 已下线；保留启动续传 —— 退出 App 后未完成的下载下次启动自动接着下。
+        it.resumePendingDownloads()
     }
     private val library = BookLibrary(
         db = db,
@@ -301,8 +301,6 @@ class JmRepository(
     suspend fun removeBook(bookId: Int) = library.removeBook(bookId)
 
     // ── 读完自动删本章（4.2.4）：同样的「退出 + 宽限 + 重入取消」模型
-    fun scheduleChapterDelete(bookId: Int) = library.scheduleChapterDelete(bookId)
-    fun cancelPendingChapterDelete(bookId: Int) = library.cancelPendingChapterDelete(bookId)
 
     suspend fun saveProgress(bookId: Int, chapterId: Int, pageIndex: Int) = library.saveProgress(bookId, chapterId, pageIndex)
     /** 阅读记忆（v1.12.0：原 read_progress 行并入账本行，返回 Book 取 lastChapterId/lastPageIndex）。 */
@@ -340,7 +338,6 @@ class JmRepository(
     suspend fun markChapterFinished(bookId: Int, chapterId: Int) = library.markChapterFinished(bookId, chapterId)
     suspend fun markChapterUnfinished(bookId: Int, chapterId: Int) = library.markChapterUnfinished(bookId, chapterId)
     suspend fun countFinishedChapters(bookId: Int): Int = library.countFinishedChapters(bookId)
-    suspend fun deleteChapter(bookId: Int, chapterId: Int) = library.deleteChapter(bookId, chapterId)
 
     // ── 收藏（v5）─────────────────────────────────────────────
 

@@ -109,17 +109,14 @@ internal class NativeAlbumDownloader(
         val done = AtomicInteger(0)
         val bytes = AtomicLong(0L)
 
-        // ── v1.9.2：**统一下载日志**（1 秒采集、按书分组、全部集中一个文件）────
-        // 用户需求原文（第三次澄清）：「一个日志记录所有下载，1s 一采集进度，
-        // 一整本记录放一起，所有记录放一个地方方便你（AI）查阅」。
+        // ── 统一下载日志 `{saveDir}/.jm_progress/download_log.txt` ──────────
+        // 一个文件装所有书，每行带 `[#{albumId}]` 标记（同一本书的行自然连续，
+        // `DownloadEventLog.readFor(id)` 可按书过滤）；超 10MB 自动轮转为 `.old.txt`。
         //
-        // 实现：`{saveDir}/.jm_progress/download_log.txt` **一个文件**装所有书：
-        //   · 采样协程**每秒**写一条进度行（`速度 X.XMB/s | N/M张 | ...`）；
-        //   · 触发型事件（开始/清单/完成摘要/失败原因）也写同一文件（见各埋点）；
-        //   · 每行带 `[#{albumId}]` 标记 → 同一本书的行自然连续，
-        //     `DownloadEventLog.readFor(id)` 可按书过滤；
-        //   · 超 10MB 自动轮转为 `.old.txt`。
-        // 同时内存里维护峰值，完成时写统计摘要。
+        // v1.18.0 降频：原来采样协程**每秒**写一条进度行（v1.9.2，用户当时要求 1s 粒度），
+        // 一整本 800 张的书写 800 行、每秒一次 appendText，对轻量版是纯负担。
+        // 现在**只在事件点写**：开始 / 章节清单 / 完成摘要（含均速+峰值）/ 失败原因 / 停滞 / 重下。
+        // 采样协程保留但不再落盘，只为完成摘要里的**峰值速度**服务（无 IO，开销可忽略）。
         val peakSpeed = java.util.concurrent.atomic.AtomicReference(0.0)
         val totalForLog = AtomicInteger(0)
         val t0ForLog = System.currentTimeMillis()
@@ -134,12 +131,7 @@ internal class NativeAlbumDownloader(
                 val mbPerSec = (b - lastB).coerceAtLeast(0L) / 1048576.0 / (dtMs / 1000.0)
                 // 峰值统计
                 peakSpeed.updateAndGet { if (mbPerSec > it) mbPerSec else it }
-                // ★ 每秒采集：写进统一下载日志（用户要的 1s 粒度）
-                DownloadEventLog.speed(
-                    saveDir, albumId, mbPerSec,
-                    done.get(), totalForLog.get(),
-                    b / 1048576.0, (t - t0ForLog) / 1000
-                )
+                // v1.18.0：不再每秒落盘，只更新内存峰值（完成摘要用）
                 lastT = t
                 lastB = b
             }

@@ -62,7 +62,6 @@ fun DownloadsScreen(nav: NavController, factory: JmViewModelFactory) {
     // progresses（整张进度 Map）**不在此处 collect**：下载中每 500ms 推一次新 Map，
     // 顶层订阅会让整页（含 MainScaffold 与所有卡片）每 500ms 重组。
     // v14 起每张 DownloadCard 通过 vm.progressFor(bookId) 只订阅自己那一条。
-    val hiddenCount by vm.hiddenCount.collectAsState()
 
     // v1.8.1：算出每本在「下载队列」里的位置（按入队时间）。
     // 之前所有等待中的书都只显示「排队中…」，7 本一起排队时看着像"全卡住了"。
@@ -82,7 +81,6 @@ fun DownloadsScreen(nav: NavController, factory: JmViewModelFactory) {
             vm.consumeDownloadError()
         }
     }
-    val showHidden by vm.showHidden.collectAsState()
 
     // 待确认「取消并删除」的目标 bookId（null 表示无弹窗）
     var pendingDelete by remember { mutableStateOf<Int?>(null) }
@@ -131,22 +129,6 @@ fun DownloadsScreen(nav: NavController, factory: JmViewModelFactory) {
                 .fillMaxSize()
                 .padding(12.dp)
         ) {
-            if (hiddenCount > 0) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "$hiddenCount 条记录已隐藏（设置 → 下载 → 被隐藏的下载记录）",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = { vm.toggleShowHidden() }) {
-                        Text(if (showHidden) "收起隐藏" else "显示隐藏")
-                    }
-                }
-            }
             if (rows.isEmpty()) {
                 // 原文案「去搜索页下载漫画吧」是 4.1.0 之前的旧引导：搜索页早已没有 JM 号入口，
                 // 属于误导；改为直接把 JM 号下载的入口摆在空状态里。
