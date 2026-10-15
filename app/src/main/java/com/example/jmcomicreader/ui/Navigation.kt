@@ -10,6 +10,13 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -78,9 +85,43 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
     val searchVm: SearchViewModel = viewModel(factory = factory)
     // 书架 ViewModel 同样提升到 NavHost 作用域：切走再回不重建、不重扫列表。
     val libraryVm: LibraryViewModel = viewModel(factory = factory)
+    // ── v1.19.0：页面转场 ────────────────────────────────────────────
+    // 之前 NavHost **没配任何转场**，走的是 navigation-compose 的默认值 ——
+    // 700ms 纯交叉淡入淡出：两屏同时合成、且慢，观感就是「糊」+「拖」。
+    // 现在统一为「180~240ms 淡入 + 轻微缩放」，节奏接近系统级转场：
+    //   · enter：淡入 + 0.94→1 放大（容器变换感，比纯淡入更「有方向」）；
+    //   · exit ：淡出 + 1→1.03 微放大（让退出的那屏「退到后面去」，不抢焦点）。
+    // 时长压到 200ms 上下是**流畅度的关键**：动画越短，用户越感觉「立刻到了」，
+    // 且两屏同时合成的窗口更小（Compose 冷启动一屏的开销被摊薄）。
+    // 阅读器单独走纯淡入 —— 全屏看图时任何位移/缩放都会让人觉得画面在抖。
+    val fastOut = tween<Float>(150, easing = FastOutLinearInEasing)
     NavHost(
         navController = nav,
-        startDestination = startRoute.takeIf { it.isNotBlank() } ?: Routes.LIBRARY
+        startDestination = startRoute.takeIf { it.isNotBlank() } ?: Routes.LIBRARY,
+        enterTransition = {
+            fadeIn(tween(190)) + scaleIn(
+                initialScale = 0.94f,
+                animationSpec = tween(240, easing = FastOutSlowInEasing)
+            )
+        },
+        exitTransition = {
+            fadeOut(fastOut) + scaleOut(
+                targetScale = 1.03f,
+                animationSpec = tween(190, easing = FastOutLinearInEasing)
+            )
+        },
+        popEnterTransition = {
+            fadeIn(tween(190)) + scaleIn(
+                initialScale = 0.96f,
+                animationSpec = tween(240, easing = FastOutSlowInEasing)
+            )
+        },
+        popExitTransition = {
+            fadeOut(fastOut) + scaleOut(
+                targetScale = 1.03f,
+                animationSpec = tween(190, easing = FastOutLinearInEasing)
+            )
+        }
     ) {
         // 「搜索」页（轻量版发现页 = 纯搜索）：无参 = 底部 Tab 进入；带 q/mode = 历史引用跳转
         composable(Routes.SEARCH) {
@@ -130,6 +171,10 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
         }
         composable(
             Routes.READER,
+            enterTransition = { fadeIn(tween(160)) },
+            exitTransition = { fadeOut(tween(140)) },
+            popEnterTransition = { fadeIn(tween(160)) },
+            popExitTransition = { fadeOut(tween(140)) },
             arguments = listOf(
                 navArgument("bookId") { type = NavType.IntType },
                 navArgument("photoId") { type = NavType.IntType },

@@ -68,6 +68,7 @@ import com.example.jmreader.ui.Routes
 import com.example.jmreader.util.AppIconManager
 import com.example.jmreader.util.JmDebug
 import com.example.jmreader.util.formatBytes
+import com.example.jmreader.ui.components.AuroraHeroCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -289,7 +290,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                     Spacer(Modifier.height(12.dp))
                     Card(shape = RoundedCornerShape(18.dp)) {
                         Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                            InfoRow("版本", "${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）")
+                            InfoRow("版本号", "${BuildConfig.VERSION_NAME}（build ${BuildConfig.VERSION_CODE}）")
                             InfoRow("安装包大小", apk)
                             InfoRow("用户数据占用", userData)
                             InfoRow("漫画本体占用", comics)
@@ -523,28 +524,15 @@ private fun AboutCard(context: Context) {
         AppIconManager.ICON_DOUBAO4 -> R.drawable.ic_launcher_doubao4_preview
         else -> R.drawable.ic_launcher_preview
     }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-        Card(
-            shape = RoundedCornerShape(26.dp),
-            colors = CardDefaults.cardColors(
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            )
-        ) {
-            androidx.compose.foundation.Image(
-                painter = painterResource(iconRes),
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(92.dp).padding(10.dp)
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        Text(context.getString(R.string.app_name), style = MaterialTheme.typography.titleMedium)
-        Text(
-            "本地漫画阅读器 · 数据全部存储在本机",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
+    // v1.19.0：头部换成 3D 极光展示卡（流动渐变 + 陀螺光环 + 图标真 3D 翻转 + 镜面扫光）。
+    // 原有「图标 + 名称 + 一句话」的信息全部收进卡内，版本号做成药丸；下方信息卡不再重复版本。
+    AuroraHeroCard(
+        icon = painterResource(iconRes),
+        title = context.getString(R.string.app_name),
+        subtitle = "本地漫画阅读器 · 数据全部存储在本机",
+        version = "v${BuildConfig.VERSION_NAME}",
+        modifier = Modifier.padding(bottom = 12.dp)
+    )
 }
 
 @Composable
