@@ -14,3 +14,5 @@ hs_err_pid*.log
 replay_pid*.log
 # 建错层级的空仓库（用户误在项目内 git init，实际用项目根的仓库）
 JM-Lite-Android/
+# git filter-branch 的临时目录（曾在项目根生成，勿误提交）
+.git-rewrite/
