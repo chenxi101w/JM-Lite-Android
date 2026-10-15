@@ -1,7 +1,10 @@
 ﻿package com.example.jmreader.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -11,12 +14,14 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -28,10 +33,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarDefaults
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -45,6 +46,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -133,61 +136,70 @@ fun MainScaffold(
             }
         },
         bottomBar = {
-            // ── v1.5.3 重做底部导航 ──────────────────────────────
-            // 旧实现（v1.1.9~v7.0.4）用 `height(60.dp).offset(y = -10.dp)` 把 NavigationBar
-            // 强行上移来压缩留白，代价有三个（用户实测「导航栏凸出来」）：
-            //   ① Scaffold 按 bottomBar 的**布局高度**算内容区 padding，而视觉上移了 10dp
-            //      → 内容能滑到导航栏底下，z 轴错位、看起来"浮"着；
-            //   ② 导航条背景靠外层 Box 补，与上方内容之间没有连续的 surface 分隔；
-            //   ③ 60dp < M3 默认 80dp，指示器/标签被压，触摸热区也偏小。
-            // 现在：去掉 offset，用 **NavigationBar 自带的 windowInsets 处理手势条**，
-            // 内容区 padding 由 Scaffold 正确下发 —— 布局与视觉一致。
-            NavigationBar(
-                // v1.6.3：彩色图标需要一点对比度，底色沿用 surface（纯灰会显闷，
-                // 但换成彩色又会与 Tab 抢视觉 —— 这里保持 surface，靠彩色图标+指示器提亮）。
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                tonalElevation = 0.dp,
-                modifier = Modifier.height(64.dp)
+            // ── v1.22.1：底部栏改为自绘极简栏（对齐参考实现 CompactBottomBar）──
+            // 为什么换掉 M3 的 NavigationBar：它每次点击都会跑
+            //   ① 选中指示器（胶囊）的缩放/淡入动画（约 300ms spring）；
+            //   ② Material 涟漪（ripple）。
+            // 结果就是「页面已经瞬时切过去了，底部栏自己还在动」——
+            // 用户感知到的「不跟手/慢半拍」最后就落在这里。
+            // 参考实现的做法是：**整条栏零动画**，靠三件事表达选中态：
+            //   tint 变色 + 字重加粗 + 图标实心/线性互换（所以连指示器都不需要）。
+            // 另外它是 52dp 紧凑高度（M3 默认 80dp），内容区能多出一截。
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 8.dp,
             ) {
-                for (r in TopLevelRoute.values()) {
-                    NavigationBarItem(
-                        selected = currentRoute == r.route,
-                        onClick = {
-                            if (currentRoute != r.route) {
-                                // v1.7.5 修「在下载页点底部导航没反应」：
-                                // 原来 `popUpTo(nav.graph.id)` 用的是**根图 id** ——
-                                // 当当前页（如 downloads）是挂在根图下的普通目的地时，
-                                // 这个 popUpTo 会把整张返回栈（含根图本身）清掉，
-                                // 导航请求被丢弃 → 点了没反应。
-                                // 标准写法是 pop 到**起始目的地**（= 书架的 library）。
-                                nav.navigate(r.route) {
-                                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .windowInsetsPadding(WindowInsets.navigationBars),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    for (r in TopLevelRoute.values()) {
+                        val selected = currentRoute == r.route
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable(
+                                    // indication = null：关掉涟漪。参考实现如此，
+                                    // 「点了就变」代替「点了先荡一圈水波」。
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    if (currentRoute != r.route) {
+                                        // popUpTo 到**起始目的地**（书架）：用根图 id 会在
+                                        // 当前页是普通目的地时把整张返回栈清掉 → 点了没反应（v1.7.5 的教训）
+                                        nav.navigate(r.route) {
+                                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    imageVector = if (selected) r.icon else r.iconIdle,
+                                    contentDescription = r.label,
+                                    tint = if (selected) r.tint else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                                Text(
+                                    text = r.label,
+                                    color = if (selected) r.tint else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                )
                             }
-                        },
-                        icon = {
-                            // v1.6.3：图标随选中态取该 Tab 的专属色（未选中统一灰）
-                            Icon(r.icon, contentDescription = r.label)
-                        },
-                        label = {
-                            Text(
-                                r.label,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        },
-                        alwaysShowLabel = true,
-                        colors = NavigationBarItemDefaults.colors(
-                            // 选中：图标 + 文字用专属色，指示器取其 18% 淡色
-                            selectedIconColor = r.tint,
-                            selectedTextColor = r.tint,
-                            indicatorColor = r.tint.copy(alpha = 0.18f),
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    )
+                        }
+                    }
                 }
             }
         },

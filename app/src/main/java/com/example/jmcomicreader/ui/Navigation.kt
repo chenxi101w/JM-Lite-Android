@@ -7,6 +7,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CollectionsBookmark
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.CollectionsBookmark
+import androidx.compose.material.icons.outlined.TravelExplore
+import androidx.compose.material.icons.outlined.Tune
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -71,13 +74,17 @@ object Routes {
 enum class TopLevelRoute(
     val route: String,
     val label: String,
+    /** 选中态图标（实心）。 */
     val icon: ImageVector,
+    /** 未选中态图标（线性）—— v1.22.1 起按参考实现的做法：选中/未选中换图标字形，
+     *  这样「当前在哪一栏」不靠指示器动画也能一眼看出。 */
+    val iconIdle: ImageVector,
     /** 选中态图标/文字色（未选中统一用 onSurfaceVariant）。 */
     val tint: Color,
 ) {
-    LIBRARY(Routes.LIBRARY, "书架", Icons.Filled.CollectionsBookmark, Color(0xFFF59E0B)),
-    DISCOVER(Routes.SEARCH, "搜索", Icons.Filled.TravelExplore, Color(0xFF06B6D4)),
-    SETTINGS(Routes.SETTINGS, "设置", Icons.Filled.Tune, Color(0xFF7C6BF0)),
+    LIBRARY(Routes.LIBRARY, "书架", Icons.Filled.CollectionsBookmark, Icons.Outlined.CollectionsBookmark, Color(0xFFF59E0B)),
+    DISCOVER(Routes.SEARCH, "搜索", Icons.Filled.TravelExplore, Icons.Outlined.TravelExplore, Color(0xFF06B6D4)),
+    SETTINGS(Routes.SETTINGS, "设置", Icons.Filled.Tune, Icons.Outlined.Tune, Color(0xFF7C6BF0)),
 }
 
 /**
