@@ -11,6 +11,10 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -68,6 +72,8 @@ fun SearchBody(
     val downloadingIds by vm.downloadingIds.collectAsState()
     // v1.5.0：接上「设置 → 搜索 → 结果列数」（此前该配置读了但 UI 写死 columns=0，等于死配置）
     val gridColumns by vm.gridColumns.collectAsState()
+    // v1.26.0：主页顶部分类快捷入口（内容就是关键词，点一下直接搜）
+    val homeCategories by vm.homeCategories.collectAsState()
     val hasMore by vm.hasMore.collectAsState()
     // v1.2.0：区分「还没搜过」与「正在搜」——
     // VM 的初始 state 就是 UiState.Loading，此前一进搜索页就无谓地转圈（用户反馈）。
@@ -139,7 +145,8 @@ fun SearchBody(
     // 用**真实高度动画**（外层 Box 裁切）而不是 graphicsLayer 平移 —— 平移会在收起后
     // 留下一块空白高度，看起来像「上面少了一块」。网格是 weight(1f)，
     // 搜索栏收起时它自动填满，视觉上就是内容长大一格。
-    val barDp = 52f
+    // 收起盒子里装的是「搜索框 + 分类 chip 行」，高度随分类数量变
+    val barDp = if (homeCategories.isEmpty()) 52f else 98f
     val barHeight = remember { Animatable(barDp) }
     val barDir = remember { mutableIntStateOf(0) }
     // 无结果时强制常驻（没东西可滚，藏起来等于把搜索入口也弄没了）
@@ -224,7 +231,31 @@ fun SearchBody(
             )
         )
 
-        }   // ← 搜索栏高度动画 Box 结束
+        // ── 分类快捷入口：分类就是关键词，点一下直接用该词搜索 ──
+        if (homeCategories.isNotEmpty()) {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 2.dp),
+            ) {
+                items(homeCategories) { cat ->
+                    FilterChip(
+                        selected = keyword.trim() == cat,
+                        onClick = {
+                            if (keyword.trim() == cat) return@FilterChip   // 已选中则不重复搜
+                            vm.setKeyword(cat)
+                            vm.onSearch()
+                            pendingHide = true
+                            hideIme()
+                            scope.launch { gridState.requestScrollToItem(0) }
+                        },
+                        label = { Text(cat, style = MaterialTheme.typography.labelMedium) },
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                    )
+                }
+            }
+        }
+        }   // ← 顶部收放区（搜索框 + 分类）高度动画 Box 结束
 
         // 未搜索过：显示引导空态（而不是转圈）
         if (!searched) {

@@ -32,6 +32,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import kotlinx.coroutines.delay
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -166,6 +167,14 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                 Routes.SUB_SEARCH -> {
                     Card(shape = RoundedCornerShape(12.dp)) {
                         Column(Modifier.fillMaxWidth()) {
+                            // v1.26.0：自定义「分类」关键词 —— 主页顶部会渲染成一排 chip，
+                            // 点哪个就直接搜哪个。分类本质就是关键词，所以不用接
+                            // /category、/list 那些要登录态的接口，用户想加什么自己写。
+                            CategoryInput(
+                                value = cfg["home_categories"] ?: "悬疑,萝莉,御姐,巨乳",
+                                onChange = { vm.set("home_categories", it) }
+                            )
+                            Divider()
                             ChipRow("默认排序",
                                 listOf("mr" to "最新", "mv" to "最多点击", "tf" to "评分", "mp" to "有配图"),
                                 cfg["default_sort"] ?: "mr") { vm.set("default_sort", it) }
@@ -565,4 +574,46 @@ private fun NightTimeDialog(
         confirmButton = { TextButton(onClick = { onConfirm(s, e) }) { Text("保存") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
+}
+
+
+/**
+ * 「分类关键词」多行输入（v1.26.0）。
+ *
+ * 为什么是"自己写关键词"而不是接 JM 的分类树接口：
+ * 分类在结果层面**就是关键词**（搜"悬疑"出来的就是悬疑分类），
+ * 而 `/category`、`/list` 通常需要登录态 —— 轻量版没有账号体系。
+ * 好处不只是绕过门槛：用户能按自己的偏好加词删词，比固定分类表更灵活。
+ *
+ * 输入做 **600ms 防抖**再落库：`vm.set` 每次都是一次 DB 写，
+ * 逐字写会把手势打得一顿。
+ */
+@Composable
+private fun CategoryInput(value: String, onChange: (String) -> Unit) {
+    var text by remember(value) { mutableStateOf(value) }
+    LaunchedEffect(text) {
+        if (text == value) return@LaunchedEffect
+        delay(600)                       // 防抖
+        if (text != value) onChange(text)
+    }
+    Column(Modifier.fillMaxWidth().padding(14.dp)) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("分类关键词", style = MaterialTheme.typography.labelMedium) },
+            placeholder = { Text("悬疑，萝莉，御姐，巨乳", style = MaterialTheme.typography.bodySmall) },
+            supportingText = {
+                Text(
+                    "用逗号分隔；主页顶部会变成一排快捷入口，点一下直接搜这个词",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            minLines = 2,
+            maxLines = 4,
+            shape = RoundedCornerShape(10.dp),
+            textStyle = MaterialTheme.typography.bodyMedium
+        )
+    }
 }

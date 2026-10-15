@@ -144,6 +144,19 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "classic")
 
     /** 搜索结果每行列数（设置 search_columns：0=默认3列；v6.0.20 新增）。随设置实时变化。 */
+    /**
+     * v1.26.0：主页顶部的「分类」快捷入口（**分类就是关键词**，点击直接走关键词搜索）。
+     *
+     * 为什么不接 `/category` + `/list`：JM 的分类树与分类列表接口通常需要登录态，
+     * 轻量版没有账号体系；而"悬疑 / 萝莉 / 御姐 / 巨乳"这类分类**本身就是关键词**，
+     * 用现成的 `search(keyword)` 就能搜出同样的结果 —— 零接口、零门槛、用户还能自己改。
+     *
+     * 跟随配置变化自动刷新（`observeConfigAll`），在设置里改完切回主页即生效。
+     */
+    val homeCategories: StateFlow<List<String>> = repo.observeConfigAll()
+        .map { parseCategories(repo.getConfig("home_categories")) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     val gridColumns: StateFlow<Int> = repo.observeConfigAll()
         .map { (repo.getConfig("search_columns") ?: "0").toIntOrNull()?.coerceAtLeast(0) ?: 0 }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -425,3 +438,14 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
         return Routes.detail(book.id, local = book.savedDir.isNotBlank())
     }
 }
+
+
+/**
+ * 解析「分类关键词」配置：逗号/顿号/换行/分号都能当分隔符，顺手去空去重（保持原顺序）。
+ */
+internal fun parseCategories(raw: String?): List<String> =
+    raw.orEmpty()
+        .split(',', '，', '、', '\n', '\r', ';', '；')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()

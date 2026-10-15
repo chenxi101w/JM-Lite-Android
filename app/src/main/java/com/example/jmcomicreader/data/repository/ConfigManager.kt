@@ -32,6 +32,10 @@ class ConfigManager(
         "reader_pages_per_screen" to "1",
         "bookshelf_columns" to "0",
         "search_columns" to "0",   // 搜索结果每行列数（0=默认3列；v6.0.20 新增）
+        // v1.26.0：主页顶部的「分类」快捷入口。**分类本质上就是关键词**，
+        // 所以直接复用现成的 search(keyword) 接口 —— 不需要 /category、/list 那些
+        // 要登录态的接口。用户在设置里自行增删，用逗号分隔。
+        "home_categories" to "悬疑,萝莉,御姐,巨乳",
         // ── 1.6.0 新增 ──
         // 4.3.1：open_directly 已移除——点漫画（主页/搜索/书架）统一直接进阅读器，详情从阅读器右上角进
         // ── 2.0.0 新增 ──
