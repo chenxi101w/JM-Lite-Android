@@ -26,8 +26,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -40,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -89,6 +93,13 @@ fun AuroraHeroCard(
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(5_200, easing = LinearEasing), RepeatMode.Reverse),
         label = "bob"
+    )
+    /** 图标转台相位：0→1 走满一圈 = 绕 Y 轴 360°（v1.20.0 每圈 7.2s，匀速不回头）。 */
+    val turn by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(7_200, easing = LinearEasing)),
+        label = "turn"
     )
 
     // 极光主色：主题色 + 两个固定紫调点缀（保证任何风格下都是「深浅紫」的高级感，而不是彩虹）。
@@ -195,54 +206,111 @@ fun AuroraHeroCard(
                 )
             }
 
-            // ── ④ 前景：3D 翻转的图标 + 文案 ──
+            // ── ④ 前景：360° 转台图标（含反光倒影）+ 文案 ──
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 18.dp, vertical = 18.dp),
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
+                val tileDp = 84.dp
+                Box(
+                    modifier = Modifier.size(tileDp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // 接触阴影：随转动「侧过去」而变窄，是判断三维旋转的关键线索
+                    Canvas(Modifier.fillMaxSize()) {
+                        val f = abs(cos(turn * 2f * PI.toFloat()))      // 1=正对 0=侧对
+                        val w = size.width * (0.52f + 0.42f * f)
+                        val h = size.height * 0.16f
+                        drawOval(
+                            brush = Brush.radialGradient(
+                                colors = listOf(Color.Black.copy(alpha = 0.42f), Color.Transparent),
+                                center = Offset(size.width / 2f, size.height * 0.92f),
+                                radius = w * 0.6f
+                            ),
+                            topLeft = Offset((size.width - w) / 2f, size.height * 0.92f - h / 2f),
+                            size = androidx.compose.ui.geometry.Size(w, h)
+                        )
+                    }
+
+                    // 主体：绕 Y 轴连续 360° 转台（相位只在绘制 lambda 里读 → 每帧仅重绘）
+                    Box(
+                        modifier = Modifier
+                            .size(tileDp)
+                            .graphicsLayer {
+                                cameraDistance = camera * 1.15f
+                                transformOrigin = TransformOrigin.Center
+                                rotationY = turn * 360f
+                                rotationX = 6f                        // 常态俯角，避免纯平面感
+                            }
+                            .clip(RoundedCornerShape(22.dp))
+                    ) {
+                        Surface(
+                            modifier = Modifier.fillMaxSize(),
+                            shape = RoundedCornerShape(22.dp),
+                            color = Color.White.copy(alpha = 0.14f)
+                        ) {}
+                        Image(
+                            painter = icon,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize().padding(6.dp)
+                        )
+                        // 反光：高光带位置与转动同相 → 像有一束固定光源扫过转动的表面
+                        Canvas(Modifier.fillMaxSize()) {
+                            val ph = (turn * 2f) % 1f
+                            val x = ph * size.width * 2f - size.width * 0.5f
+                            drawRect(
+                                brush = Brush.linearGradient(
+                                    colors = listOf(
+                                        Color.Transparent,
+                                        Color.White.copy(alpha = 0.05f),
+                                        Color.White.copy(alpha = 0.52f),
+                                        Color.White.copy(alpha = 0.05f),
+                                        Color.Transparent
+                                    ),
+                                    start = Offset(x - size.width * 0.42f, 0f),
+                                    end = Offset(x + size.width * 0.42f, size.height)
+                                )
+                            )
+                        }
+                    }
+                }
+
+                // 底部镜像倒影：向下渐隐（DstIn 遮罩），与主体同步转动
                 Box(
                     modifier = Modifier
-                        .size(88.dp)
-                        // 相位只在 graphicsLayer 的绘制 lambda 里读取 → 每帧仅重绘
-                        .graphicsLayer {
-                            cameraDistance = camera
-                            scaleX = 1f
-                            scaleY = 1f
-                            transformOrigin = TransformOrigin.Center
-                            // 竖向轻微摇摆 + 常态俯角：做成「悬浮全息盘」而不是纯平面图标
-                            rotationY = sin(bob * 2f * PI.toFloat()) * 16f
-                            rotationX = 8f + cos(bob * 2f * PI.toFloat()) * 4f
-                        }
-                        .clip(RoundedCornerShape(24.dp))
+                        .size(tileDp)
+                        .height(tileDp * 0.52f)
+                        .clipToBounds()
                 ) {
-                    Surface(
-                        modifier = Modifier.fillMaxSize(),
-                        shape = RoundedCornerShape(24.dp),
-                        color = Color.White.copy(alpha = 0.14f)
-                    ) {}
                     Image(
                         painter = icon,
                         contentDescription = null,
-                        modifier = Modifier.fillMaxSize().padding(8.dp)
+                        modifier = Modifier
+                            .size(tileDp)
+                            .graphicsLayer {
+                                cameraDistance = camera * 1.15f
+                                transformOrigin = TransformOrigin.Center
+                                rotationY = turn * 360f
+                                scaleY = -1f                 // 垂直翻转 = 镜面倒影
+                            }
+                            .drawWithContent {
+                                drawContent()
+                                // 越往下越透明：白色不透明处保留倒影，透明处抹掉
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.White.copy(alpha = 0.42f),
+                                            Color.Transparent
+                                        )
+                                    ),
+                                    blendMode = BlendMode.DstIn
+                                )
+                            }
+                            .padding(6.dp)
                     )
-                    // 图标表面扫过的镜面高光
-                    Canvas(Modifier.fillMaxSize()) {
-                        val x = (flow * 2f % 1f) * size.width * 2f - size.width * 0.5f
-                        drawRect(
-                            brush = Brush.linearGradient(
-                                colors = listOf(
-                                    Color.Transparent,
-                                    Color.White.copy(alpha = 0.35f),
-                                    Color.Transparent
-                                ),
-                                start = Offset(x - size.width * 0.35f, 0f),
-                                end = Offset(x + size.width * 0.35f, size.height)
-                            )
-                        )
-                    }
                 }
 
                 Spacer(Modifier.height(12.dp))
