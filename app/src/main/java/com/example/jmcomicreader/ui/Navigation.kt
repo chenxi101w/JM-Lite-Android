@@ -10,9 +10,11 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
-import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -78,6 +80,25 @@ enum class TopLevelRoute(
     SETTINGS(Routes.SETTINGS, "设置", Icons.Filled.Tune, Color(0xFF7C6BF0)),
 }
 
+/**
+ * 该路由是否属于某个顶级 Tab（底部导航三选一）。
+ *
+ * 复用 [topLevelRouteOf] 的归一化 —— 它已经把 `search/{q}/{mode}` 这类子路由归到
+ * `search`，所以「书架 → 带参搜索页」也会被正确认成 Tab 切换（底部栏本来就把那里
+ * 高亮成「搜索」Tab，观感一致）。**不要再另立一份 Tab 路由清单**，否则两处会漂移。
+ */
+private fun isTopLevelTab(route: String?): Boolean {
+    val normalized = topLevelRouteOf(route)
+    return normalized == Routes.LIBRARY || normalized == Routes.SEARCH || normalized == Routes.SETTINGS
+}
+
+/**
+ * 是否属于「顶级 Tab 之间互切」——只有这种情况关掉转场（瞬时到位）。
+ * 其余（Tab → 详情/阅读器/设置二级页）照常走 push/pop 动画。
+ */
+private fun androidx.compose.animation.AnimatedContentTransitionScope<androidx.navigation.NavBackStackEntry>.isTabSwitch(): Boolean =
+    isTopLevelTab(initialState.destination.route) && isTopLevelTab(targetState.destination.route)
+
 @Composable
 fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY) {
     val nav = rememberNavController()
@@ -85,42 +106,34 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
     val searchVm: SearchViewModel = viewModel(factory = factory)
     // 书架 ViewModel 同样提升到 NavHost 作用域：切走再回不重建、不重扫列表。
     val libraryVm: LibraryViewModel = viewModel(factory = factory)
-    // ── v1.19.0：页面转场 ────────────────────────────────────────────
-    // 之前 NavHost **没配任何转场**，走的是 navigation-compose 的默认值 ——
-    // 700ms 纯交叉淡入淡出：两屏同时合成、且慢，观感就是「糊」+「拖」。
-    // 现在统一为「180~240ms 淡入 + 轻微缩放」，节奏接近系统级转场：
-    //   · enter：淡入 + 0.94→1 放大（容器变换感，比纯淡入更「有方向」）；
-    //   · exit ：淡出 + 1→1.03 微放大（让退出的那屏「退到后面去」，不抢焦点）。
-    // 时长压到 200ms 上下是**流畅度的关键**：动画越短，用户越感觉「立刻到了」，
-    // 且两屏同时合成的窗口更小（Compose 冷启动一屏的开销被摊薄）。
-    // 阅读器单独走纯淡入 —— 全屏看图时任何位移/缩放都会让人觉得画面在抖。
-    val fastOut = tween<Float>(150, easing = FastOutLinearInEasing)
+    // ── v1.22.0：转场改为参考实现那套「iOS 风格 push/pop」───────────────
+    // 对照 1976764/jm-comic-android 的 AppNavigation.kt（用户说的「人家」）：
+    //   enter：新页从右侧**整屏滑入** 250ms；
+    //   exit ：当前页向左移 **1/4 屏** 250ms（视差，制造纵深）；
+    //   popExit：当前页向右整屏滑出 + 渐隐 220ms；popEnter：上一页淡入 220ms。
+    // 关键差别（v1.19.0 我做错的地方）：
+    //   ① 我用的是 fade + scale，方向感弱；滑动的方向本身就在告诉用户「进了下一层」；
+    //   ② **人家的底部 Tab 切换是完全不做动画的**（`when(selectedTab)` 直接换内容，瞬时到位），
+    //      而我给所有路由套了同一套淡入缩放 —— 每次切 Tab 都要等 200ms，主观就是「慢半拍」。
+    // 所以这里加了 isTabSwitch() 判断：**顶级 Tab 互切 → None（瞬时）**，
+    // 其余（进详情/阅读器/设置二级页）才走滑动。
     NavHost(
         navController = nav,
         startDestination = startRoute.takeIf { it.isNotBlank() } ?: Routes.LIBRARY,
         enterTransition = {
-            fadeIn(tween(190)) + scaleIn(
-                initialScale = 0.94f,
-                animationSpec = tween(240, easing = FastOutSlowInEasing)
-            )
+            if (isTabSwitch()) EnterTransition.None
+            else slideInHorizontally(tween(250)) { full -> full }
         },
         exitTransition = {
-            fadeOut(fastOut) + scaleOut(
-                targetScale = 1.03f,
-                animationSpec = tween(190, easing = FastOutLinearInEasing)
-            )
+            if (isTabSwitch()) ExitTransition.None
+            else slideOutHorizontally(tween(250)) { full -> -full / 4 }
         },
         popEnterTransition = {
-            fadeIn(tween(190)) + scaleIn(
-                initialScale = 0.96f,
-                animationSpec = tween(240, easing = FastOutSlowInEasing)
-            )
+            if (isTabSwitch()) EnterTransition.None else fadeIn(tween(220))
         },
         popExitTransition = {
-            fadeOut(fastOut) + scaleOut(
-                targetScale = 1.03f,
-                animationSpec = tween(190, easing = FastOutLinearInEasing)
-            )
+            if (isTabSwitch()) ExitTransition.None
+            else slideOutHorizontally(tween(220)) { full -> full } + fadeOut(tween(220))
         }
     ) {
         // 「搜索」页（轻量版发现页 = 纯搜索）：无参 = 底部 Tab 进入；带 q/mode = 历史引用跳转
@@ -171,10 +184,6 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
         }
         composable(
             Routes.READER,
-            enterTransition = { fadeIn(tween(160)) },
-            exitTransition = { fadeOut(tween(140)) },
-            popEnterTransition = { fadeIn(tween(160)) },
-            popExitTransition = { fadeOut(tween(140)) },
             arguments = listOf(
                 navArgument("bookId") { type = NavType.IntType },
                 navArgument("photoId") { type = NavType.IntType },
