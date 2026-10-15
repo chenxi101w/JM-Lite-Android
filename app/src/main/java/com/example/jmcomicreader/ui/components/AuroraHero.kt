@@ -1,5 +1,6 @@
 package com.example.jmreader.ui.components
 
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -8,6 +9,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,27 +17,29 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Size as GeoSize
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalDensity
@@ -45,25 +49,48 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.sin
 
 /**
- * 关于页顶部「3D 渐变展示」主视觉（v1.19.0）。
+ * 关于页顶部展示卡（v1.21.0 按参考实现重做）。
  *
- * 设计目标：把原先「静态图标 + 名称」的关于页头部，换成一块**有生命力的展示卡**：
- *  - **流动的极光渐变**：多色线性渐变按相位旋转，颜色从主题色系取（换主题风格会跟着变）；
- *  - **3D 陀螺光环**：两层 sweep 渐变的圆盘做垂直压扁（scaleY≈0.42）后反向自转，
- *    在平面上模拟出立体圆环/全息盘的效果；
- *  - **浮动高光**：一个柔和的径向高光沿椭圆轨道游走，制造「玻璃反射」感；
- *  - **图标真 3D**：图标卡片走 graphicsLayer 的 rotationY/rotationX 加 cameraDistance，
- *    产生真实的透视翻转，并在表面扫过一道镜面高光。
+ * **这一版的两处「照搬」**（对照 1976764/jm-comic-android 的 AboutScreen，即用户说的「人家」）：
+ *  1. **模糊色块漂移背景** —— 用户夸的「3D 渐变」真身：从 12 色调色板随机取 3 个颜色，
+ *     各画一个大圆（径向渐变：中心实色 → 30% → 透明），六个**独立周期**的 X/Y 位移动画
+ *     （8~13 秒、FastOutSlowIn、Reverse），整体套 `blur`。所以它是**慢慢流动的柔光**，
+ *     既不是静态渐变，也不是我上一版那套「旋转极光 + 陀螺光环」。
+ *  2. **转速 20°/秒**（一圈 18 秒），对齐人家的 `rotation-per-second="20deg"`；
+ *     我上一版 7.2 秒/圈（50°/s）快了 2.5 倍，观感「着急」。
  *
- * ⚠️ **性能约束（重要）**：所有动画相位都是 State，但**只在绘制阶段读取**
- * （Canvas 的 draw lambda 与 graphicsLayer 的 lambda 块内），
- * 因此每帧只触发 **draw 阶段失效**，不会引起重组、也不会触发 measure/layout。
- * 这是这个组件能在中低端机上满帧跑的关键 —— 后续改它时**不要把相位读进 @Composable 作用域**
- * （例如 `val p = phase.value` 提到外面再用），那会让整张卡每帧重组。
+ * **必须知道的天花板**：人家的 3D 物体是 **WebView + `<model-viewer>` 加载真 GLB 模型**
+ * （`assets/models/JM.glb`，`auto-rotate`，`exposure=1.2`，`shadow-intensity=0`）——
+ * 有**真实体积**与**真实环境反射**。我们这里是**平面位图绕 Y 轴旋转**，
+ * 观感像一张有厚度的贴纸在转台上转，不是真三维模型。
+ * 要完全一致必须引入 GLB（方案对比见 `docs/升级日志/v1.21.0.md`）。
+ *
+ * ⚠️ **性能约束（改前必读）**：所有动画相位只在**绘制阶段**读取
+ * （`Canvas` 的 draw lambda、`graphicsLayer` 的 lambda、`drawWithContent` 的 lambda），
+ * 每帧只让 draw 阶段失效，**不重组、不 measure/layout**。
+ * 绝不能把相位读进 @Composable 作用域（如 `val a = turn.value` 提到外面用），
+ * 那会让整张卡每帧重组，中低端机立刻掉帧。
  */
+private val BlobColors = listOf(
+    Color(0xFF7C3AED), // 紫
+    Color(0xFF8B5CF6),
+    Color(0xFF6366F1), // 靛蓝
+    Color(0xFF3B82F6), // 蓝
+    Color(0xFF06B6D4), // 青
+    Color(0xFF14B8A6), // 青绿
+    Color(0xFF22C55E), // 绿
+    Color(0xFFEAB308), // 黄
+    Color(0xFFF97316), // 橙
+    Color(0xFFEF4444), // 红
+    Color(0xFFEC4899), // 粉
+    Color(0xFFD946EF)  // 紫红
+)
+
+/** 感知亮度：决定深色主题下是否压暗色块（避免整块糊成荧光）。 */
+private fun Color.luma(): Float = 0.2126f * red + 0.7152f * green + 0.0722f * blue
+
 @Composable
 fun AuroraHeroCard(
     icon: Painter,
@@ -73,201 +100,128 @@ fun AuroraHeroCard(
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val transition = rememberInfiniteTransition(label = "aurora")
+    val transition = rememberInfiniteTransition(label = "hero")
 
-    // 三个不同周期的相位，避免各层同步旋转产生「整块在转」的廉价感。
-    val flow by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(14_000, easing = LinearEasing)),
-        label = "flow"
-    )
-    val spin by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(9_000, easing = LinearEasing)),
-        label = "spin"
-    )
-    val bob by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(5_200, easing = LinearEasing), RepeatMode.Reverse),
-        label = "bob"
-    )
-    /** 图标转台相位：0→1 走满一圈 = 绕 Y 轴 360°（v1.20.0 每圈 7.2s，匀速不回头）。 */
+    /** 图标转台相位：20°/秒 → 一圈 18 秒。 */
     val turn by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(7_200, easing = LinearEasing)),
+        animationSpec = infiniteRepeatable(tween(18_000, easing = LinearEasing)),
         label = "turn"
     )
 
-    // 极光主色：主题色 + 两个固定紫调点缀（保证任何风格下都是「深浅紫」的高级感，而不是彩虹）。
-    val cA = scheme.primary
-    val cB = scheme.tertiary
-    val cC = scheme.primaryContainer
-    val cD = scheme.secondaryContainer
-    val accent = Color(0xFF7C6BF0)
-    val deep = Color(0xFF2A1E5C)
+    // 六个独立相位：三个色块各有 X/Y，周期互不相同 → 交错流动，而不是整体平移
+    val x1 by transition.animateFloat(-60f, 60f, infiniteRepeatable(tween(8_000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "x1")
+    val y1 by transition.animateFloat(-45f, 50f, infiniteRepeatable(tween(10_000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "y1")
+    val x2 by transition.animateFloat(70f, -70f, infiniteRepeatable(tween(12_000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "x2")
+    val y2 by transition.animateFloat(35f, -55f, infiniteRepeatable(tween(9_000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "y2")
+    val x3 by transition.animateFloat(30f, -50f, infiniteRepeatable(tween(11_000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "x3")
+    val y3 by transition.animateFloat(80f, -70f, infiniteRepeatable(tween(13_000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "y3")
 
-    // 图标 3D 摆动幅度（px）——按密度换算，保证不同屏幕视觉一致。
-    val density = LocalDensity.current
-    val camera = with(density) { 14.dp.toPx() }
+    // 每次进页面随机取 3 色（与参考实现同做法）
+    val colors = remember { BlobColors.shuffled().take(3) }
+    val dim = if (scheme.surface.luma() > 0.5f) 1f else 0.7f
 
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(26.dp),
-        color = deep,                       // 兜底色：渐变没盖住的地方也不刺眼
+        color = scheme.surfaceVariant.copy(alpha = 0.5f),
         tonalElevation = 0.dp
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(196.dp)
+                .height(206.dp)
                 .clip(RoundedCornerShape(26.dp))
         ) {
-            // ── ① 流动极光底：线性渐变整体绕中心旋转 ──
-            Canvas(Modifier.fillMaxSize()) {
-                val w = size.width
-                val h = size.height
-                val ang = flow * 2f * PI.toFloat()
-                val r = kotlin.math.hypot(w, h) / 2f
-                val cx = w / 2f
-                val cy = h / 2f
-                val brush = Brush.linearGradient(
-                    colors = listOf(cA, accent, cB, cC, cD, cA),
-                    start = Offset(cx + r * cos(ang), cy + r * sin(ang)),
-                    end = Offset(cx - r * cos(ang), cy - r * sin(ang))
+            // ── ① 模糊色块漂移背景 ──
+            Box(
+                modifier = Modifier.fillMaxSize().blur(60.dp),   // API<31 是 no-op；径向渐变本身已足够柔
+                contentAlignment = Alignment.Center
+            ) {
+                val blobs = listOf(
+                    Triple(colors[0], x1, y1),
+                    Triple(colors[1], x2, y2),
+                    Triple(colors[2], x3, y3)
                 )
-                drawRect(brush = brush)
-            }
-
-            // ── ② 3D 陀螺光环：两层压扁的 sweep 圆盘反向自转 ──
-            Canvas(Modifier.fillMaxSize()) {
-                val cx = size.width / 2f
-                val cy = size.height / 2f
-                val radius = size.height * 0.62f
-                val a1 = spin * 360f
-                // 内盘：顺时针
-                rotate(degrees = a1, pivot = Offset(cx, cy)) {
-                    scale(scaleX = 1f, scaleY = 0.42f, pivot = Offset(cx, cy)) {
-                        drawCircle(
-                            brush = Brush.sweepGradient(
-                                colors = listOf(
-                                    Color.Transparent,
-                                    Color.White.copy(alpha = 0.55f),
-                                    Color.Transparent,
-                                    Color.White.copy(alpha = 0.28f),
-                                    Color.Transparent
+                blobs.forEachIndexed { i, (c, ox, oy) ->
+                    val d = when (i) { 0 -> 300.dp; 1 -> 260.dp; else -> 190.dp }
+                    Box(
+                        modifier = Modifier
+                            .size(d)
+                            .offset(x = ox.dp, y = oy.dp)
+                            .background(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(
+                                        c.copy(alpha = 0.85f * dim),
+                                        c.copy(alpha = 0.30f * dim),
+                                        Color.Transparent
+                                    )
                                 ),
-                                center = Offset(cx, cy)
-                            ),
-                            radius = radius,
-                            center = Offset(cx, cy),
-                            style = Stroke(width = size.height * 0.055f)
-                        )
-                    }
-                }
-                // 外盘：逆时针，更细更淡，拉开层次
-                rotate(degrees = -a1 * 0.6f, pivot = Offset(cx, cy)) {
-                    scale(scaleX = 1f, scaleY = 0.30f, pivot = Offset(cx, cy)) {
-                        drawCircle(
-                            brush = Brush.sweepGradient(
-                                colors = listOf(
-                                    Color.Transparent,
-                                    cB.copy(alpha = 0.85f),
-                                    Color.Transparent,
-                                    Color.White.copy(alpha = 0.20f),
-                                    Color.Transparent
-                                ),
-                                center = Offset(cx, cy)
-                            ),
-                            radius = radius * 1.22f,
-                            center = Offset(cx, cy),
-                            style = Stroke(width = size.height * 0.030f)
-                        )
-                    }
+                                shape = CircleShape
+                            )
+                    )
                 }
             }
 
-            // ── ③ 浮动高光：沿椭圆轨道游走的柔光，制造玻璃反射 ──
-            Canvas(Modifier.fillMaxSize()) {
-                val ang = flow * 2f * PI.toFloat()
-                val cx = size.width / 2f + size.width * 0.30f * cos(ang)
-                val cy = size.height / 2f + size.height * 0.20f * sin(ang * 1.3f)
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(Color.White.copy(alpha = 0.30f), Color.Transparent),
-                        center = Offset(cx, cy),
-                        radius = size.height * 0.55f
-                    ),
-                    radius = size.height * 0.55f,
-                    center = Offset(cx, cy)
-                )
-            }
-
-            // ── ④ 前景：360° 转台图标（含反光倒影）+ 文案 ──
+            // ── ② 转台图标（反光 + 倒影 + 接触阴影）+ 文案 ──
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                    .padding(horizontal = 18.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                val tileDp = 84.dp
-                Box(
-                    modifier = Modifier.size(tileDp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    // 接触阴影：随转动「侧过去」而变窄，是判断三维旋转的关键线索
+                val camera = with(LocalDensity.current) { 14.dp.toPx() }
+                val tile = 84.dp
+
+                Box(modifier = Modifier.size(tile), contentAlignment = Alignment.Center) {
+                    // 接触阴影：随转动侧过去而变窄 —— 人眼判断「在三维里转」的关键线索
                     Canvas(Modifier.fillMaxSize()) {
-                        val f = abs(cos(turn * 2f * PI.toFloat()))      // 1=正对 0=侧对
-                        val w = size.width * (0.52f + 0.42f * f)
-                        val h = size.height * 0.16f
+                        val f = abs(cos(turn * 2f * PI.toFloat()))
+                        val w = size.width * (0.50f + 0.44f * f)
+                        val h = size.height * 0.15f
                         drawOval(
                             brush = Brush.radialGradient(
-                                colors = listOf(Color.Black.copy(alpha = 0.42f), Color.Transparent),
-                                center = Offset(size.width / 2f, size.height * 0.92f),
+                                colors = listOf(Color.Black.copy(alpha = 0.34f), Color.Transparent),
+                                center = Offset(size.width / 2f, size.height * 0.94f),
                                 radius = w * 0.6f
                             ),
-                            topLeft = Offset((size.width - w) / 2f, size.height * 0.92f - h / 2f),
-                            size = androidx.compose.ui.geometry.Size(w, h)
+                            topLeft = Offset((size.width - w) / 2f, size.height * 0.94f - h / 2f),
+                            size = GeoSize(w, h)
                         )
                     }
-
-                    // 主体：绕 Y 轴连续 360° 转台（相位只在绘制 lambda 里读 → 每帧仅重绘）
                     Box(
                         modifier = Modifier
-                            .size(tileDp)
+                            .size(tile)
                             .graphicsLayer {
                                 cameraDistance = camera * 1.15f
                                 transformOrigin = TransformOrigin.Center
                                 rotationY = turn * 360f
-                                rotationX = 6f                        // 常态俯角，避免纯平面感
+                                rotationX = 5f
                             }
                             .clip(RoundedCornerShape(22.dp))
                     ) {
                         Surface(
                             modifier = Modifier.fillMaxSize(),
                             shape = RoundedCornerShape(22.dp),
-                            color = Color.White.copy(alpha = 0.14f)
+                            color = scheme.surface.copy(alpha = 0.22f)
                         ) {}
                         Image(
                             painter = icon,
                             contentDescription = null,
                             modifier = Modifier.fillMaxSize().padding(6.dp)
                         )
-                        // 反光：高光带位置与转动同相 → 像有一束固定光源扫过转动的表面
+                        // 反光：高光带与转动同相 → 像一束固定光源扫过转动的表面
                         Canvas(Modifier.fillMaxSize()) {
-                            val ph = (turn * 2f) % 1f
-                            val x = ph * size.width * 2f - size.width * 0.5f
+                            val x = ((turn * 2f) % 1f) * size.width * 2f - size.width * 0.5f
                             drawRect(
                                 brush = Brush.linearGradient(
                                     colors = listOf(
                                         Color.Transparent,
-                                        Color.White.copy(alpha = 0.05f),
-                                        Color.White.copy(alpha = 0.52f),
-                                        Color.White.copy(alpha = 0.05f),
+                                        Color.White.copy(alpha = 0.06f),
+                                        Color.White.copy(alpha = 0.55f),
+                                        Color.White.copy(alpha = 0.06f),
                                         Color.Transparent
                                     ),
                                     start = Offset(x - size.width * 0.42f, 0f),
@@ -281,28 +235,27 @@ fun AuroraHeroCard(
                 // 底部镜像倒影：向下渐隐（DstIn 遮罩），与主体同步转动
                 Box(
                     modifier = Modifier
-                        .size(tileDp)
-                        .height(tileDp * 0.52f)
+                        .size(tile)
+                        .height(tile * 0.5f)
                         .clipToBounds()
                 ) {
                     Image(
                         painter = icon,
                         contentDescription = null,
                         modifier = Modifier
-                            .size(tileDp)
+                            .size(tile)
                             .graphicsLayer {
                                 cameraDistance = camera * 1.15f
                                 transformOrigin = TransformOrigin.Center
                                 rotationY = turn * 360f
-                                scaleY = -1f                 // 垂直翻转 = 镜面倒影
+                                scaleY = -1f
                             }
                             .drawWithContent {
                                 drawContent()
-                                // 越往下越透明：白色不透明处保留倒影，透明处抹掉
                                 drawRect(
                                     brush = Brush.verticalGradient(
                                         colors = listOf(
-                                            Color.White.copy(alpha = 0.42f),
+                                            Color.White.copy(alpha = 0.38f),
                                             Color.Transparent
                                         )
                                     ),
@@ -313,31 +266,31 @@ fun AuroraHeroCard(
                     )
                 }
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
+                // 文案改用主题色：背景已从「深紫卡」改成主题表面色，白字会看不见
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
+                    color = scheme.onSurface,
                     textAlign = TextAlign.Center
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.78f),
+                    color = scheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
                 )
                 Spacer(Modifier.height(8.dp))
-                // 版本小药丸
                 Surface(
                     shape = RoundedCornerShape(50),
-                    color = Color.White.copy(alpha = 0.18f)
+                    color = scheme.primary.copy(alpha = 0.14f)
                 ) {
                     Text(
                         text = version,
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
+                        color = scheme.primary,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                     )
                 }
