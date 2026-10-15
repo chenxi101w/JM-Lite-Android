@@ -40,6 +40,15 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.geometry.Offset
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -135,76 +144,30 @@ fun MainScaffold(
                 }
             }
         },
-        bottomBar = {
-            // ── v1.22.1：底部栏改为自绘极简栏（对齐参考实现 CompactBottomBar）──
-            // 为什么换掉 M3 的 NavigationBar：它每次点击都会跑
-            //   ① 选中指示器（胶囊）的缩放/淡入动画（约 300ms spring）；
-            //   ② Material 涟漪（ripple）。
-            // 结果就是「页面已经瞬时切过去了，底部栏自己还在动」——
-            // 用户感知到的「不跟手/慢半拍」最后就落在这里。
-            // 参考实现的做法是：**整条栏零动画**，靠三件事表达选中态：
-            //   tint 变色 + 字重加粗 + 图标实心/线性互换（所以连指示器都不需要）。
-            // 另外它是 52dp 紧凑高度（M3 默认 80dp），内容区能多出一截。
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 8.dp,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .windowInsetsPadding(WindowInsets.navigationBars),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    for (r in TopLevelRoute.values()) {
-                        val selected = currentRoute == r.route
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .clickable(
-                                    // indication = null：关掉涟漪。参考实现如此，
-                                    // 「点了就变」代替「点了先荡一圈水波」。
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                ) {
-                                    if (currentRoute != r.route) {
-                                        // popUpTo 到**起始目的地**（书架）：用根图 id 会在
-                                        // 当前页是普通目的地时把整张返回栈清掉 → 点了没反应（v1.7.5 的教训）
-                                        nav.navigate(r.route) {
-                                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    }
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Icon(
-                                    imageVector = if (selected) r.icon else r.iconIdle,
-                                    contentDescription = r.label,
-                                    tint = if (selected) r.tint else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                                Text(
-                                    text = r.label,
-                                    color = if (selected) r.tint else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
+        bottomBar = { CompactTabBar(currentRoute, nav) },
         floatingActionButton = fab
     ) { padding ->
+        // ── v1.23.0：悬浮球随内容滚动收拉 ──────────────────────────────
+        // 下滑时缩到 0（完全收起，点不到），上滑立刻复原。
+        // 用 nestedScroll 在**这一层**统一观察，不动每个页面的列表代码。
+        val fabScale = remember { Animatable(1f) }
+        val scrollDir = remember { mutableIntStateOf(0) }
+        val scope = rememberCoroutineScope()
+        val scrollConn = remember {
+            object : NestedScrollConnection {
+                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                    val dy = consumed.y
+                    if (dy > 6f && scrollDir.intValue != 1) {
+                        scrollDir.intValue = 1
+                        scope.launch { fabScale.animateTo(0f, tween(180)) }
+                    } else if (dy < -6f && scrollDir.intValue != -1) {
+                        scrollDir.intValue = -1
+                        scope.launch { fabScale.animateTo(1f, tween(180)) }
+                    }
+                    return Offset.Zero
+                }
+            }
+        }
         // padding 来自 Scaffold：top = TopAppBar 高度（含状态栏），bottom = NavigationBar 高度（含导航栏）
         // 但由于我们设置了 contentWindowInsets=0，无 TopAppBar 时需自己补 statusBars.top，
         // 否则内容会顶到状态栏下面、最上面点不到
@@ -218,7 +181,7 @@ fun MainScaffold(
                 systemInsets.calculateEndPadding(LayoutDirection.Ltr),
             bottom = padding.calculateBottomPadding()
         )
-        Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().nestedScroll(scrollConn)) {
             Column(Modifier.fillMaxSize()) {
                 content(merged)
             }
@@ -231,7 +194,10 @@ fun MainScaffold(
             val safeTopPx = with(density) { merged.calculateTopPadding().roundToPx() }
             val safeBottomPx = with(density) { merged.calculateBottomPadding().roundToPx() }
             if (currentRoute != Routes.DOWNLOADS) {
-                DraggableDownloadFab(nav, safeTopPx = safeTopPx, safeBottomPx = safeBottomPx)
+                DraggableDownloadFab(
+                    nav, safeTopPx = safeTopPx, safeBottomPx = safeBottomPx,
+                    scale = fabScale.value,
+                )
             }
         }
     }
@@ -256,6 +222,10 @@ private fun DraggableDownloadFab(
     nav: NavController,
     safeTopPx: Int,
     safeBottomPx: Int,
+    /** v1.23.0：随内容滚动收拉的缩放（1=正常，0=完全收起）。
+     *  用**真实尺寸变化**而不是 graphicsLayer 缩放 —— 后者会留下一个透明的
+     *  56dp 点击区，收起后点那块地方会误进下载页。 */
+    scale: Float = 1f,
     modifier: Modifier = Modifier,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -263,7 +233,7 @@ private fun DraggableDownloadFab(
         context.getSharedPreferences("jmcomic_prefs", android.content.Context.MODE_PRIVATE)
     }
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val fabSizePx = with(density) { 56.dp.roundToPx() }
+    val fabSizePx = with(density) { (56 * scale).dp.roundToPx() }
     val marginPx = with(density) { 16.dp.roundToPx() }
 
     androidx.compose.foundation.layout.BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -280,7 +250,7 @@ private fun DraggableDownloadFab(
                 else IntOffset(maxX, maxY)
             )
         }
-        FloatingActionButton(
+        if (scale > 0.02f) FloatingActionButton(
             // ★ v2.1.2 修「点悬浮球进不去下载页」：
             //   `detectDragGestures` 在**未超过拖动阈值**的轻点时不会触发 onDragEnd，
             //   把导航放在 onDragEnd 里 = 纯点击永远没反应（真机实测）。
@@ -296,6 +266,7 @@ private fun DraggableDownloadFab(
                 pressedElevation = 8.dp
             ),
             modifier = Modifier
+                .size((56 * scale).dp)
                 .offset { IntOffset(pos.x.coerceIn(minX, maxX), pos.y.coerceIn(minY, maxY)) }
                 .pointerInput(maxX, maxY) {
                     detectDragGestures(
@@ -328,5 +299,75 @@ fun topLevelRouteOf(route: String?): String {
         route.startsWith("library") -> Routes.LIBRARY
         route.startsWith("settings") -> Routes.SETTINGS
         else -> route
+    }
+}
+
+/**
+ * 极简底部导航栏（v1.22.1 起抽出，v1.23.0 详情页也用它）。
+ *
+ * 抽成独立组件的原因：**底部栏本来是「每个顶级页面各自调 MainScaffold」才有**，
+ * 于是详情页/阅读器这类自己画全屏 Scaffold 的页面完全没有底栏 ——
+ * 从详情页进到搜索等深层页面后，用户没法直接切回书架，只能按返回键（实测体验很差）。
+ * 现在详情页也挂上这条栏，切 Tab 一步到位。
+ *
+ * 零动画：整条栏没有指示器动画、没有涟漪（`indication = null`），
+ * 选中态靠 tint + 字重 + 实心/线性图标三者表达。
+ */
+@Composable
+fun CompactTabBar(currentRoute: String, nav: NavController) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 8.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .windowInsetsPadding(WindowInsets.navigationBars),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (r in TopLevelRoute.values()) {
+                val selected = currentRoute == r.route
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) {
+                            if (currentRoute != r.route) {
+                                // popUpTo 到**起始目的地**（书架）：用根图 id 会在当前页是
+                                // 普通目的地时把整张返回栈清掉 → 点了没反应（v1.7.5 的教训）
+                                nav.navigate(r.route) {
+                                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (selected) r.icon else r.iconIdle,
+                            contentDescription = r.label,
+                            tint = if (selected) r.tint else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(
+                            text = r.label,
+                            color = if (selected) r.tint else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        }
     }
 }

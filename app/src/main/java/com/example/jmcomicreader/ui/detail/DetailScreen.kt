@@ -61,10 +61,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.compose.runtime.collectAsState
 import com.example.jmreader.data.local.Chapter
-import com.example.jmreader.ui.JmViewModelFactory
+import com.example.jmreader.ui.CompactTabBar
+import com.example.jmreader.ui.Routes
 import com.example.jmreader.ui.RemoteDecodedImage
 import com.example.jmreader.util.formatSpeed
-import com.example.jmreader.ui.Routes
 import com.example.jmreader.ui.UiState
 
 private const val TAG_LIMIT = 10
@@ -80,8 +80,11 @@ private const val TAG_LIMIT = 10
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun DetailScreen(nav: NavController, factory: JmViewModelFactory, albumId: Int, local: Boolean = false) {
-    val vm: DetailViewModel = viewModel(factory = factory)
+fun DetailScreen(nav: NavController, vm: DetailViewModel, albumId: Int, local: Boolean = false) {
+    // v1.23.0：DetailViewModel 由 NavHost 作用域持有并传入（原来在这里 viewModel(factory)）。
+    // 它内部本来就有「同一本不重拉」的缓存护栏（loadedId），
+    // 但页面作用域的 VM 一离开就被销毁 → 缓存白留；从详情页切到书架再回来会重新转圈。
+    // 提升到 NavHost 作用域后：**切 Tab 回来直接复用已加载状态，不重新请求**。
     val state by vm.state.collectAsState()
     val downloading by vm.downloading.collectAsState()
     val downloadProgress by vm.downloadProgress.collectAsState()
@@ -97,6 +100,10 @@ fun DetailScreen(nav: NavController, factory: JmViewModelFactory, albumId: Int, 
 
     LaunchedEffect(albumId) { vm.load(albumId, preferLocal = local) }
     Scaffold(
+        // v1.23.0：**详情页也挂底部栏**。原来底栏是「每个顶级页面各自调 MainScaffold」才有，
+        // 详情页自己画全屏 Scaffold 把底栏整个盖住 → 从详情页进搜索等深层页面后
+        // 没法直接切回书架，只能按返回键。阅读器仍保持全屏沉浸（看图不该有栏）。
+        bottomBar = { CompactTabBar(Routes.DETAIL, nav) },
         topBar = {
             TopAppBar(
                 title = { Text((state as? UiState.Success)?.data?.book?.title ?: "详情") },
@@ -428,26 +435,26 @@ private fun DetailSkeleton(modifier: Modifier = Modifier) {
             Row(Modifier.fillMaxWidth()) {
                 Surface(
                     modifier = Modifier.size(120.dp),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(10.dp),
                     color = baseColor.copy(alpha = 0.4f)
                 ) {}
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Surface(
                         modifier = Modifier.fillMaxWidth().height(24.dp),
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(6.dp),
                         color = baseColor.copy(alpha = 0.4f)
                     ) {}
                     Spacer(Modifier.height(8.dp))
                     Surface(
                         modifier = Modifier.width(160.dp).height(16.dp),
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(6.dp),
                         color = baseColor.copy(alpha = 0.3f)
                     ) {}
                     Spacer(Modifier.height(12.dp))
                     Surface(
                         modifier = Modifier.width(120.dp).height(16.dp),
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(6.dp),
                         color = baseColor.copy(alpha = 0.3f)
                     ) {}
                 }
@@ -457,21 +464,21 @@ private fun DetailSkeleton(modifier: Modifier = Modifier) {
             Spacer(Modifier.height(8.dp))
             Surface(
                 modifier = Modifier.fillMaxWidth().height(40.dp),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(10.dp),
                 color = baseColor.copy(alpha = 0.25f)
             ) {}
         }
         item {
             Surface(
                 modifier = Modifier.width(120.dp).height(16.dp),
-                shape = RoundedCornerShape(4.dp),
+                shape = RoundedCornerShape(6.dp),
                 color = baseColor.copy(alpha = 0.3f)
             ) {}
         }
         items(6, contentType = { "related" }) {
             Surface(
                 modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(10.dp),
                 color = baseColor.copy(alpha = 0.25f)
             ) {}
         }

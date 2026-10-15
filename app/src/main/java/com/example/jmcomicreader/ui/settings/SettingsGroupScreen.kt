@@ -130,7 +130,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
 
             when (group) {
                 Routes.SUB_APPEARANCE -> {
-                    Card(shape = RoundedCornerShape(18.dp)) {
+                    Card(shape = RoundedCornerShape(12.dp)) {
                         Column(Modifier.fillMaxWidth()) {
                             ChipRow("主题",
                                 listOf("system" to "跟随系统", "light" to "浅色",
@@ -151,7 +151,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                 }
 
                 Routes.SUB_LIBRARY -> {
-                    Card(shape = RoundedCornerShape(18.dp)) {
+                    Card(shape = RoundedCornerShape(12.dp)) {
                         ChipRow("每行列数",
                             listOf("0" to "自适应", "2" to "2 列", "3" to "3 列",
                                 "4" to "4 列", "5" to "5 列"),
@@ -164,7 +164,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                 }
 
                 Routes.SUB_SEARCH -> {
-                    Card(shape = RoundedCornerShape(18.dp)) {
+                    Card(shape = RoundedCornerShape(12.dp)) {
                         Column(Modifier.fillMaxWidth()) {
                             ChipRow("默认排序",
                                 listOf("mr" to "最新", "mv" to "最多点击", "tf" to "评分", "mp" to "有配图"),
@@ -192,7 +192,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                 }
 
                 Routes.SUB_READER -> {
-                    Card(shape = RoundedCornerShape(18.dp)) {
+                    Card(shape = RoundedCornerShape(12.dp)) {
                         Column(Modifier.fillMaxWidth()) {
                             ChipRow("览模式每屏页数",
                                 (1..6).map { it.toString() to "$it 页" },
@@ -215,7 +215,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                 }
 
                 Routes.SUB_DOWNLOAD -> {
-                    Card(shape = RoundedCornerShape(18.dp)) {
+                    Card(shape = RoundedCornerShape(12.dp)) {
                         Column(Modifier.fillMaxWidth()) {
                             RowItem("下载管理", "查看进度 / 重试 / 清理") {
                                 nav.navigate(Routes.DOWNLOADS)
@@ -224,7 +224,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                     }
                     Spacer(Modifier.height(12.dp))
                     // v1.7.9：并发设置（总并发 = 本数 × 图片并发）
-                    Card(shape = RoundedCornerShape(18.dp)) {
+                    Card(shape = RoundedCornerShape(12.dp)) {
                         Column(Modifier.fillMaxWidth()) {
                             // v1.8.7：档位整体上调 —— 官方客户端默认 30 并发，
                             // 原来最高只能选到 12，天花板比官方低一半以上。
@@ -278,7 +278,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                     AboutCard(context)
                     Spacer(Modifier.height(12.dp))
                     // v1.7.1：调试日志开关（排查下载/搜索问题时开）
-                    Card(shape = RoundedCornerShape(18.dp)) {
+                    Card(shape = RoundedCornerShape(12.dp)) {
                         Column(Modifier.fillMaxWidth()) {
                             var dbg by remember { mutableStateOf(JmDebug.verbose) }
                             SwitchRow("调试日志", "记录全链路日志（排查问题时开启）", dbg) { on ->
@@ -288,7 +288,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    Card(shape = RoundedCornerShape(18.dp)) {
+                    Card(shape = RoundedCornerShape(12.dp)) {
                         Column(Modifier.fillMaxWidth().padding(14.dp)) {
                             InfoRow("版本号", "${BuildConfig.VERSION_NAME}（build ${BuildConfig.VERSION_CODE}）")
                             InfoRow("安装包大小", apk)
@@ -373,7 +373,7 @@ private fun SyncCard(
         (cfg["sync_last_result"] ?: "").isNotBlank() -> "${cfg["sync_last_result"]} · $lastTime"
         else -> "启用后每次启动自动备份；换机/重装一键找回"
     }
-    Card(shape = RoundedCornerShape(18.dp)) {
+    Card(shape = RoundedCornerShape(12.dp)) {
         Column(Modifier.fillMaxWidth()) {
             SwitchRow("云同步", "看过的漫画 JM 号备份到自有服务器", enabled) {
                 vm.setSyncEnabled(it)

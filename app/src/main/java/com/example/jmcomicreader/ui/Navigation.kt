@@ -27,6 +27,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.jmreader.ui.detail.DetailScreen
+import com.example.jmreader.ui.detail.DetailViewModel
 import com.example.jmreader.ui.discover.DiscoverScreen
 import com.example.jmreader.ui.downloads.DownloadsScreen
 import com.example.jmreader.ui.library.LibraryScreen
@@ -113,6 +114,9 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
     val searchVm: SearchViewModel = viewModel(factory = factory)
     // 书架 ViewModel 同样提升到 NavHost 作用域：切走再回不重建、不重扫列表。
     val libraryVm: LibraryViewModel = viewModel(factory = factory)
+    // v1.23.0：详情页 VM 也提升到 NavHost 作用域 —— 它内部有「同一本不重拉」缓存，
+    // 但页面作用域的 VM 一离开就销毁，从详情页切 Tab 再回来会重新转圈拉一遍。
+    val detailVm: DetailViewModel = viewModel(factory = factory)
     // ── v1.22.0：转场改为参考实现那套「iOS 风格 push/pop」───────────────
     // 对照 1976764/jm-comic-android 的 AppNavigation.kt（用户说的「人家」）：
     //   enter：新页从右侧**整屏滑入** 250ms；
@@ -187,7 +191,7 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
         ) {
             val albumId = it.arguments?.getInt("albumId") ?: 0
             val local = it.arguments?.getBoolean("local") ?: false
-            DetailScreen(nav = nav, factory = factory, albumId = albumId, local = local)
+            DetailScreen(nav = nav, vm = detailVm, albumId = albumId, local = local)
         }
         composable(
             Routes.READER,
