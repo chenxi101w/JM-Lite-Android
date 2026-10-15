@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.jmreader"
         minSdk = 24
         targetSdk = 34
-        versionCode = 88
-        versionName = "1.23.0"
+        versionCode = 89
+        versionName = "1.24.0"
 
         // v1.4.0：仅 arm64-v8a（真机为 arm64）。Chaquopy 移除后不再有"多架构重复装 Python 包"的开销。
         ndk {

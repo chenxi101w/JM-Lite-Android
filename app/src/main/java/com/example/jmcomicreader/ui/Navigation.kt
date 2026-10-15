@@ -131,13 +131,18 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
     NavHost(
         navController = nav,
         startDestination = startRoute.takeIf { it.isNotBlank() } ?: Routes.LIBRARY,
+        // v1.24.0：默认改成**淡入淡出**。原来默认就是横滑（层级下钻那套），
+        // 结果连「详情 → 搜索结果」「点 Tab」这种平级跳转也横滑 —— 用户反馈
+        //「切哪个都是左翻页」。按 M3 选型（见 Knowledge Base/Animation/03）：
+        // **横滑只用于层级下钻**，平级关系用 fade through。真正需要横滑的
+        // 详情页在下面单独覆盖。
         enterTransition = {
             if (isTabSwitch()) EnterTransition.None
-            else slideInHorizontally(tween(250)) { full -> full }
+            else fadeIn(tween(190))
         },
         exitTransition = {
             if (isTabSwitch()) ExitTransition.None
-            else slideOutHorizontally(tween(250)) { full -> -full / 4 }
+            else fadeOut(tween(170))
         },
         popEnterTransition = {
             if (isTabSwitch()) EnterTransition.None else fadeIn(tween(220))
@@ -187,7 +192,16 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
             arguments = listOf(
                 navArgument("albumId") { type = NavType.IntType },
                 navArgument("local") { type = NavType.BoolType; defaultValue = false }
-            )
+            ),
+            // v1.24.0：**只有详情页保留横滑**（它是真正的"进入下一层"）。
+            // 新页右侧整屏滑入 250ms，旧页左移 1/4 屏做视差；
+            // 返回时当前页向右滑出并渐隐 220ms，上一页淡入。
+            enterTransition = { slideInHorizontally(tween(250)) { full -> full } },
+            exitTransition = { slideOutHorizontally(tween(250)) { full -> -full / 4 } },
+            popEnterTransition = { fadeIn(tween(220)) },
+            popExitTransition = {
+                slideOutHorizontally(tween(220)) { full -> full } + fadeOut(tween(220))
+            }
         ) {
             val albumId = it.arguments?.getInt("albumId") ?: 0
             val local = it.arguments?.getBoolean("local") ?: false
@@ -195,6 +209,11 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
         }
         composable(
             Routes.READER,
+            // v1.24.0：全屏看图**不要位移** —— 横向滑动会让画面晃眼，纯淡入。
+            enterTransition = { fadeIn(tween(160)) },
+            exitTransition = { fadeOut(tween(140)) },
+            popEnterTransition = { fadeIn(tween(160)) },
+            popExitTransition = { fadeOut(tween(140)) },
             arguments = listOf(
                 navArgument("bookId") { type = NavType.IntType },
                 navArgument("photoId") { type = NavType.IntType },
