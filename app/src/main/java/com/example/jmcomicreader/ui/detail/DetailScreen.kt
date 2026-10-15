@@ -2,6 +2,8 @@
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,6 +32,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -53,7 +56,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import com.example.jmreader.ui.LocalShowHints
-import com.example.jmreader.ui.components.SynonymGroupChips
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
@@ -76,7 +78,7 @@ private const val TAG_LIMIT = 10
  * - Loading 态用骨架屏而非纯转圈，首屏感知更快
  * - 章节列表用 items(key = { it.id }) 精准定位，滚动更稳
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun DetailScreen(nav: NavController, factory: JmViewModelFactory, albumId: Int, local: Boolean = false) {
     val vm: DetailViewModel = viewModel(factory = factory)
@@ -85,22 +87,15 @@ fun DetailScreen(nav: NavController, factory: JmViewModelFactory, albumId: Int, 
     val downloadProgress by vm.downloadProgress.collectAsState()
     val downloadError by vm.downloadError.collectAsState()
     val isLocal by vm.isLocal.collectAsState()
-    val authorSubscribed by vm.isAuthorSubscribed.collectAsState()
     val isFavorite by vm.isFavorite.collectAsState()
     val finishedChapterIds by vm.finishedChapterIds.collectAsState()
     val finishedChapters by vm.finishedChapters.collectAsState()
-    val aliasGroups by vm.aliasTagGroups.collectAsState()
 
     var showMenu by remember { mutableStateOf(false) }
     var showJmDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(albumId) { vm.load(albumId, preferLocal = local) }
-    // 详情加载成功后把该作者的订阅新作标记为已看（书架「订阅更新」角标联动）
-    LaunchedEffect((state as? UiState.Success)?.data?.book?.author) {
-        vm.markUpdatesSeenIfAny()
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -195,7 +190,7 @@ fun DetailScreen(nav: NavController, factory: JmViewModelFactory, albumId: Int, 
                                         )
                                     }
                                 }
-                                // 作者：点一下直接按作者搜索；右侧心形按钮一键订阅该作者
+                                // 作者：点一下直接按作者搜索
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
                                         "作者：",
@@ -212,18 +207,6 @@ fun DetailScreen(nav: NavController, factory: JmViewModelFactory, albumId: Int, 
                                                 .clickable { nav.navigate(Routes.search(b.author, "author")) }
                                                 .padding(vertical = 2.dp)
                                         )
-                                        IconButton(
-                                            onClick = { vm.toggleAuthorSubscription() },
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                if (authorSubscribed) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                                                contentDescription = if (authorSubscribed) "取消订阅作者" else "订阅作者",
-                                                tint = if (authorSubscribed) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
                                     } else {
                                         Text("未知", style = MaterialTheme.typography.bodyMedium)
                                     }
@@ -291,22 +274,23 @@ fun DetailScreen(nav: NavController, factory: JmViewModelFactory, albumId: Int, 
                             )
                             Spacer(Modifier.height(4.dp))
                             val shownTags = if (tagsExpanded || tagList.size <= TAG_LIMIT) tagList else tagList.take(TAG_LIMIT)
-                            // 同义词自动分组展示（v5.5.0）：互为同义的标签包进同一几何图；点击行为按模式（收藏/搜索）
-                            SynonymGroupChips(
-                                tags = shownTags,
-                                groups = aliasGroups,
-                                onTagClick = { t ->
-                                    if (tagMode) vm.toggleFavTag(t) else nav.navigate(Routes.search(t, "tags"))
-                                },
-                                isSelected = { t -> tagMode && t in favTags },
-                                label = { t ->
-                                    // v6.0.21：选中态由 FilterChip leadingIcon ✓ 呈现，label 不再重复加「✓」前缀
-                                    Text(
-                                        t,
-                                        style = MaterialTheme.typography.labelSmall
+                            // 标签 Chip 行（v1.17.0：原 SynonymGroupChips 随别名功能下线，
+                            // 这里直接铺一排 FilterChip，行为不变：收藏模式点标签切换收藏，搜索模式点标签搜同标签）
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                shownTags.forEach { t ->
+                                    val selected = tagMode && t in favTags
+                                    FilterChip(
+                                        selected = selected,
+                                        onClick = {
+                                            if (tagMode) vm.toggleFavTag(t)
+                                            else nav.navigate(Routes.search(t, "tags"))
+                                        },
+                                        label = {
+                                            Text(t, style = MaterialTheme.typography.labelSmall)
+                                        }
                                     )
                                 }
-                            )
+                            }
                             if (tagList.size > TAG_LIMIT) {
                                 Spacer(Modifier.height(2.dp))
                                 TextButton(onClick = { tagsExpanded = !tagsExpanded }) {

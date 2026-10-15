@@ -188,7 +188,6 @@ fun DownloadsScreen(nav: NavController, factory: JmViewModelFactory) {
                         onCancelDelete = { pendingDelete = row.download.bookId },
                         onRedownload = { vm.redownload(row.download.bookId) },
                         local = row.local,
-                        blocked = row.blocked,
                         queuePos = queueOrder[row.download.bookId]
                     )
                 }
@@ -297,7 +296,6 @@ private fun DownloadCard(
     onCancelDelete: () -> Unit,
     onRedownload: () -> Unit,
     local: Boolean = true,
-    blocked: Boolean = false,
     /** v1.8.1：在下载队列里的位置（1 起）；null = 不在队列中。 */
     queuePos: Int? = null,
 ) {
@@ -419,15 +417,6 @@ private fun DownloadCard(
             if (dl.status == "DONE" && !local) {
                 Text(
                     text = "⚠ 已不在本地（重新下载可恢复）",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp, end = 8.dp)
-                )
-            }
-            // 4.13.0：下载完但已拉黑的漫画给标识（comic_status BIT_BLOCKED）
-            if (blocked) {
-                Text(
-                    text = "🚫 已拉黑（不再参与喜欢/推荐；可在搜索长按或阅读器菜单取消）",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 4.dp, end = 8.dp)

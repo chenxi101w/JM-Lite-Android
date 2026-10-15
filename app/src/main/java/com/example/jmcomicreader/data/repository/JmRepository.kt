@@ -1,30 +1,18 @@
 ﻿package com.example.jmreader.data.repository
 
 import com.example.jmreader.data.local.AppDatabase
-import com.example.jmreader.data.local.Alias
-import com.example.jmreader.data.local.Blacklist
 import com.example.jmreader.data.local.Book
-import com.example.jmreader.data.local.Category
 import com.example.jmreader.data.local.Chapter
-import com.example.jmreader.data.local.ComicCategory
 import com.example.jmreader.data.local.Download
 import com.example.jmreader.data.local.SearchHistory
 import com.example.jmreader.data.local.SearchHistoryAgg
 import com.example.jmreader.data.local.SystemConfig
-import com.example.jmreader.data.local.Subscription
-import com.example.jmreader.data.local.SubscriptionUpdate
-import com.example.jmreader.data.local.TagLibrary
 import com.example.jmreader.data.api.JmApiClient
-import com.example.jmreader.data.api.JmApiHost
-import android.os.StatFs
 import android.util.Log
-import com.example.jmreader.BuildConfig
 import com.example.jmreader.JmComicApplication
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -37,8 +25,7 @@ import java.util.concurrent.TimeUnit
  * 门面（Facade）：保持全部公开方法签名不变（各 ViewModel 零改动），
  * 内部按职责委派给 5 个单一职责类：
  *  - [ConfigManager]   配置/代理/并发
- *  - [ContentFilter]   拉黑/别名/搜索过滤
- *  - [CategoryManager] 分类管理
+ *  - [ContentFilter]   搜索结果过滤（已下载/已看完屏蔽）
  *  - [DownloadManager] 下载全流程
  *  - [BookLibrary]     书架/进度/智能缓存/在线抓取
  * 进程级内存缓存（封面、详情）保留在本类，供委派对象通过回调失效。
@@ -79,21 +66,16 @@ class JmRepository(
     // ── 子模块（单一职责）──────────────────────────────────────
 
     private val config = ConfigManager(db)
-    private val filter = ContentFilter(db)
-    private val categories = CategoryManager(db)
+    private val filter = ContentFilter()
 
     /** 云同步（v1.10.0）：看过的漫画 JM 号与用户自有服务器双向合并。 */
     private val sync = JmSyncManager(db)
-
-    /** 下载完成 → 从回收站拾回（经方法引用注入下载管理器，避免属性互相引用的类型递归）。 */
-    private suspend fun onDownloadRestore(id: Int) = library.restoreFromRecycle(id)
 
     private val downloads = DownloadManager(
         db = db,
         saveDir = saveDir,
         configProvider = { config.getConfig(it) },
-        onDetailInvalidated = ::invalidateDetail,
-        restoreFromRecycle = ::onDownloadRestore   // v7.1.0：下载完成即从回收站拾回
+        onDetailInvalidated = ::invalidateDetail
     ).also {
         it.startStuckWatchdog()
         it.resumePendingDownloads()   // v6.0.19：启动自动恢复上次未完成的下载（断点续传）
@@ -154,9 +136,6 @@ class JmRepository(
         time: String = "a",
         tagsLogic: String = "or",
         tagsJson: String = "",
-        aliasesJson: String = "",
-        blocksJson: String = "",
-        smartAssociation: Boolean = true
     ): List<Book> {
         // ── v1.1.0 提速：优先走同源 JSON 接口，绕开 Python ──
         // 旧链路 Kotlin → Chaquopy → Python → jmcomic 抓 HTML → 解析 DOM；
@@ -166,8 +145,7 @@ class JmRepository(
         // 排序(orderBy/时间 time)与标签(tagsJson)的接口参数枚举尚未逐一验证，
         // 故这些场景继续走 Python，避免行为不一致。
         // 需要整体回退时把 USE_API_SEARCH 置 false 即可（或删掉本段）。
-        if (USE_API_SEARCH &&
-            mode == "keyword" &&
+        if (mode == "keyword" &&
             tagsJson.isBlank() &&
             orderBy == "mr" &&
             time == "a"
@@ -183,10 +161,10 @@ class JmRepository(
             if (!viaApi.isNullOrEmpty()) {
                 return viaApi
             }
-            // 接口不可用（离线 / 线路全挂 / 协议变更）→ 静默回退 Python 链路
-            Log.w("JmRepository", "JSON 接口搜索无结果，回退 Python 链路")
+            // 接口不可用（离线 / 线路全挂 / 协议变更）→ 走 BookLibrary 兜底
+            Log.w("JmRepository", "JSON 接口搜索无结果，回退 BookLibrary 链路")
         }
-        return library.search(keyword, mode, page, orderBy, time, tagsLogic, tagsJson, aliasesJson, blocksJson, smartAssociation)
+        return library.search(keyword, mode, page, orderBy, time, tagsLogic, tagsJson)
     }
 
     /** 取详情；forceRefresh=false 且内存已缓存则直接返回，跳过联网。 */
@@ -265,58 +243,14 @@ class JmRepository(
         return java.io.File(java.io.File(cacheDir, "img"), "$md5.$ext")
     }
 
-    // ── 拉黑 / 别名 / 搜索过滤 ────────────────────────────────
-
-    // 拉黑（讨厌标记，不参与搜索过滤；供喜欢/讨厌算法用）
-    fun observeBlacklists(): Flow<List<Blacklist>> = filter.observeBlacklists()
-    suspend fun addBlacklist(type: String, value: String): Long {
-        val id = filter.addBlacklist(type, value)
-        // 同步 comic_status 位掩码的 BIT_BLOCKED（作品级即时置位；作者级按归一化名匹配其全部漫画）
-        if (type == "work") value.toIntOrNull()?.let { library.syncBlockedBit(it, true) }
-        else if (type == "author") library.syncBlockedForAuthor(value, true)
-        return id
-    }
-    suspend fun removeBlacklist(id: Int) {
-        // 先取回待删项，按其 type/value 清对应状态行 BIT_BLOCKED，再删 blacklists 行
-        filter.getBlacklist(id)?.let { bl ->
-            if (bl.type == "work") bl.value.toIntOrNull()?.let { library.syncBlockedBit(it, false) }
-            else if (bl.type == "author") library.syncBlockedForAuthor(bl.value, false)
-        }
-        filter.removeBlacklist(id)
-    }
-
-    fun observeAliases(type: String): Flow<List<Alias>> = filter.observeAliases(type)
-    /** 同义词分组（canonical → 别名列表），供标签分组显示用。 */
-    fun observeAliasGroups(type: String): Flow<Map<String, List<String>>> =
-        filter.observeAliases(type).map { list -> list.groupBy({ it.canonical }, { it.alias }) }
-    suspend fun addAlias(type: String, alias: String, canonical: String): Long = filter.addAlias(type, alias, canonical)
-    suspend fun removeAlias(id: Int) = filter.removeAlias(id)
-    suspend fun getAliasesJson(): String = filter.getAliasesJson()
-
     fun filterSearchResults(
         results: List<Book>,
         hideMode: String,
         downloadedIds: Set<Int>,
         hideFinishedMode: String = "off",
-        finishedIds: Set<Int> = emptySet(),
-        hatedTags: Set<String> = emptySet()
+        finishedIds: Set<Int> = emptySet()
     ): Pair<List<Book>, Set<Int>> =
-        filter.filterSearchResults(results, hideMode, downloadedIds, hideFinishedMode, finishedIds, hatedTags)
-
-    // ── 分类 ──────────────────────────────────────────────────
-
-    fun observeCategories(): Flow<List<Category>> = categories.observeCategories()
-    fun observeAllComicCategories(): Flow<List<ComicCategory>> = categories.observeAllComicCategories()
-    fun observeComicCategories(comicJmId: Int): Flow<List<Int>> = categories.observeComicCategories(comicJmId)
-    suspend fun createCategory(name: String, parentId: Int? = null): Long = categories.createCategory(name, parentId)
-    suspend fun renameCategory(id: Int, name: String): Boolean = categories.renameCategory(id, name)
-    suspend fun moveCategory(id: Int, parentId: Int?): Boolean = categories.moveCategory(id, parentId)
-    suspend fun deleteCategory(id: Int): Boolean = categories.deleteCategory(id)
-    suspend fun deleteCategoryWithReassign(catId: Int, targetCatId: Int): Boolean = categories.deleteCategoryWithReassign(catId, targetCatId)
-    suspend fun setComicCategories(comicJmId: Int, categoryIds: List<Int>) = categories.setComicCategories(comicJmId, categoryIds)
-    suspend fun getComicCategories(comicJmId: Int): List<Int> = categories.getComicCategories(comicJmId)
-    suspend fun getDefaultCategoryBookIds(): Set<Int> = categories.getDefaultCategoryBookIds()
-    suspend fun getBookIdsInCategory(categoryId: Int): List<Int> = categories.getBookIdsInCategory(categoryId)
+        filter.filterSearchResults(results, hideMode, downloadedIds, hideFinishedMode, finishedIds)
 
     // ── 搜索历史 ──────────────────────────────────────────────
 
@@ -366,90 +300,9 @@ class JmRepository(
     suspend fun removeBook(book: Book) = library.removeBook(book)
     suspend fun removeBook(bookId: Int) = library.removeBook(bookId)
 
-    // ── 回收站（v7.1.0；v7.1.3 重构为宽限期模型）──
-    fun observeAllBooks(): Flow<List<Book>> = library.observeAllBooks()
-    /** 看完标号：写宽限期（不删本地，7 天没再看才删）。 */
-    suspend fun markFinishedRecycle(bookId: Int) = library.markFinishedRecycle(bookId)
-    /** 宽限期内再阅读：续期 7 天。 */
-    suspend fun renewRecycle(bookId: Int) = library.renewRecycle(bookId)
-    /** 手动删除进回收站：立即删本地 + 标记。 */
-    suspend fun trashBook(bookId: Int) = library.trashBook(bookId)
-    suspend fun restoreFromRecycle(bookId: Int) = library.restoreFromRecycle(bookId)
-    suspend fun deleteFromRecycle(bookId: Int) = library.deleteFromRecycle(bookId)
-    fun observeTrashed(): Flow<List<RecycleManager.TrashItem>> = library.observeTrashed()
-    suspend fun checkRecycleExpiry() = library.checkRecycleExpiry()
-    fun recycleRetentionDays(): Int = library.recycleRetentionDays()
-
     // ── 读完自动删本章（4.2.4）：同样的「退出 + 宽限 + 重入取消」模型
     fun scheduleChapterDelete(bookId: Int) = library.scheduleChapterDelete(bookId)
     fun cancelPendingChapterDelete(bookId: Int) = library.cancelPendingChapterDelete(bookId)
-
-    // ── 作者订阅（P1-4，3.0.0 / 4.0.0）──
-    suspend fun addSubscription(author: String): Boolean = library.addSubscription(author)
-    suspend fun removeSubscription(id: Int) = library.removeSubscription(id)
-    suspend fun removeSubscriptionAndUpdates(id: Int, author: String) = library.removeSubscriptionAndUpdates(id, author)
-    fun observeSubscriptions(): Flow<List<Subscription>> = library.observeSubscriptions()
-    suspend fun clearSubscriptionNew(id: Int) = library.clearSubscriptionNew(id)
-    /** 检查订阅更新，返回新作数量。 */
-    suspend fun checkSubscriptionsForUpdates(): Int = library.checkSubscriptionsForUpdates().size
-
-    /**
-     * 检查订阅更新 + 新作自动下载（v7.2.0）：配置 sub_auto_download 开启时，
-     * 本次发现的新作自动入书架并加入后台下载队列；关闭则仅记录不下载。返回新作数量。
-     */
-    suspend fun checkSubscriptionsForUpdatesWithAutoDownload(): Int {
-        val newWorks = library.checkSubscriptionsForUpdates()
-        if (newWorks.isNotEmpty() && getConfig("sub_auto_download") == "1") {
-            for (w in newWorks) { runCatching { library.saveBook(w) } }
-            downloads.enqueueAlbums(newWorks.map { it.id })
-        }
-        return newWorks.size
-    }
-    fun observeSubscriptionUpdates(): Flow<List<SubscriptionUpdate>> = library.observeSubscriptionUpdates()
-    fun observeUnseenUpdates(): Flow<List<SubscriptionUpdate>> = library.observeUnseenUpdates()
-    suspend fun markUpdateSeen(bookId: Int) = library.markUpdateSeen(bookId)
-    suspend fun markAllUpdatesSeen() = library.markAllUpdatesSeen()
-
-    // ── 智能关联拓展（P2/P3，3.0.0）──
-    suspend fun isSmartAssociationEnabled(): Boolean = library.isSmartAssociationEnabled()
-    suspend fun getMinHits(): Int = library.getMinHits()
-    suspend fun resetPreferenceSample(): Boolean = library.resetPreferenceSample()
-
-    /** 组合算法逻辑报告（喜欢画像 + 权重 + 屏蔽 + 同义词 + 策略），供逻辑查看页可视化整条搜索/推荐流程。 */
-    suspend fun getLogicReport(): LogicReport {
-        val profile = library.getPreferenceProfile()
-        val smart = library.isSmartAssociationEnabled()
-        val sampleCount = library.countFavorites()
-        val minHits = library.getMinHits()
-        val aliases = filter.countAliasesByType()
-        val ss = getConfig("search_strategy") ?: "classic"
-        val rs = getConfig("recommend_strategy") ?: "classic"
-        // 总开关关闭时无活跃权重：喜欢 Top 置空，由逻辑页显示「已关闭」提示
-        val primaryTop = if (smart) {
-            val weights = library.getPreferredTagWeights()
-            profile.primary.map { it to (weights[it] ?: 90) }.sortedByDescending { it.second }.take(12)
-        } else emptyList()
-        val microTop = if (smart) {
-            val weights = library.getPreferredTagWeights()
-            profile.micro.map { it to (weights[it] ?: 10) }.sortedByDescending { it.second }.take(12)
-        } else emptyList()
-        // 标题名称特征（关键字分词）单独计分，与标签喜欢分开展示（4.1.0）
-        val keywordTop = if (smart) library.computeNameFeatureTags().take(12) else emptyList()
-        return LogicReport(
-            smartAssociation = smart,
-            sampleCount = sampleCount,
-            manualCount = profile.manual.size,
-            primaryTop = primaryTop,
-            microTop = microTop,
-            keywordTop = keywordTop,
-            aliasCounts = aliases,
-            minHits = minHits,
-            searchStrategy = ss,
-            searchStrategyLabel = AlgorithmRegistry.searchStrategy(ss).label,
-            recommendStrategy = rs,
-            recommendStrategyLabel = AlgorithmRegistry.recommendStrategy(rs).label,
-        )
-    }
 
     suspend fun saveProgress(bookId: Int, chapterId: Int, pageIndex: Int) = library.saveProgress(bookId, chapterId, pageIndex)
     /** 阅读记忆（v1.12.0：原 read_progress 行并入账本行，返回 Book 取 lastChapterId/lastPageIndex）。 */
@@ -524,53 +377,13 @@ class JmRepository(
     /** 清空阅读画像（纯账本行删除 + 在架/收藏行清阅读记忆）。 */
     suspend fun clearReadingProfile() = library.clearReadingProfile()
 
-    // ── 喜欢 / 讨厌标签 / 书架排序 ────────────────────────────
-
-    suspend fun getPreferredTags(): Set<String> = library.getPreferredTags()
-    suspend fun getHatedTags(): Set<String> = library.getHatedTags()
-    suspend fun saveHatedTags(tags: List<String>) = library.saveHatedTags(tags)
-    suspend fun computePreferredTags(): List<Pair<String, Int>> = library.computePreferredTags()
-    // ── 喜欢画像（v2.4.3：手动/计算拆分 + 主喜欢/微喜欢）──
-    suspend fun getManualPreferredTags(): Set<String> = library.getManualPreferredTags()
-    suspend fun saveManualPreferredTags(tags: Set<String>) = library.saveManualPreferredTags(tags)
-    suspend fun getPreferenceProfile(): BookLibrary.PreferenceProfile = library.getPreferenceProfile()
-    suspend fun getPreferredTagWeights(): Map<String, Int> = library.getPreferredTagWeights()
-    suspend fun getMaxPreferredTags(): Int = library.getMaxPreferredTags()
-
-    // ── 标签库（v2.7.0：搜索结果累积，按数量排序）─────────────
-    suspend fun addSearchTags(tags: List<String>) = library.addSearchTags(tags)
-    fun observeTagLibrary(): Flow<List<TagLibrary>> = library.observeTagLibrary()
-    fun observeMergedTagLibrary(): Flow<List<Pair<String, Int>>> = library.observeMergedTagLibrary()
-    suspend fun getTagLibrary(): List<TagLibrary> = library.getTagLibrary()
-    suspend fun clearTagLibrary() = library.clearTagLibrary()
-    /** 只读获取某漫画真实标签（不落库），供搜索结果后台补抓标签库。 */
-    suspend fun getAlbumTags(albumId: Int): List<String> = library.getAlbumTags(albumId)
-    /** 某漫画是否已被拉黑（v5.11.0 阅读器「拉黑/删除处理」用）。 */
-    suspend fun isBookBlocked(bookId: Int): Boolean = library.isBookBlocked(bookId)
     /** 漫画本体占用字节数（设置页「关于」）。 */
     suspend fun getDownloadedBytes(): Long = library.getDownloadedBytes()
-    /** 搜索结果后台补抓标签（关键词/作者搜索结果往往不带 tags）。 */
-    suspend fun enrichTagLibraryFromSearch(books: List<Book>, cap: Int = 15) =
-        library.enrichTagLibraryFromSearch(books, cap)
 
-    // ── 无关性标签（v4.14.0 起；5.0.19 用户可决定）──
-    suspend fun isIrrelevantTag(tag: String): Boolean = library.isIrrelevantTag(tag)
-    suspend fun getDefaultIrrelevantTags(): Set<String> = library.getDefaultIrrelevantTags()
-    suspend fun getIgnoredTags(): Set<String> = library.getIgnoredTags()
-    suspend fun setIgnoredTags(tags: Set<String>) = library.setIgnoredTags(tags)
-    suspend fun toggleIgnoredTag(tag: String) = library.toggleIgnoredTag(tag)
-    suspend fun isHideIrrelevantEnabled(): Boolean = library.isHideIrrelevantEnabled()
-    suspend fun setHideIrrelevant(on: Boolean) = library.setHideIrrelevant(on)
-    suspend fun aggregateComicTags(scope: String, cap: Int = 30): List<Pair<String, Int>> =
-        library.aggregateComicTags(scope, cap)
-
-    // ── 标签相关性（4.13.0：同义词智能推荐 / 一键分组）──
-    suspend fun computeTagCorrelations(minScore: Int = 2): List<BookLibrary.TagCorrelation> =
-        library.computeTagCorrelations(minScore)
-    suspend fun groupCorrelatedTags(): List<List<String>> = library.groupCorrelatedTags()
-    // ── 一键分类（4.13.0）──
-    suspend fun proposeCategories(minBooks: Int = 3, topN: Int = 8): List<BookLibrary.CategoryProposal> =
-        library.proposeCategories(minBooks, topN)
+    /**
+     * 书架排序（v1.17.0：标签匹配排序随标签库下线，library 侧已回落为按加入时间；
+     * `preferred` 参数保留只为不改调用方签名，已不再参与计算）。
+     */
     fun sortLibraryBooks(
         books: List<Book>,
         sortMode: String,
@@ -578,121 +391,7 @@ class JmRepository(
         preferred: Set<String>
     ): List<Book> = library.sortLibraryBooks(books, sortMode, unfinishedFirst, preferred)
 
-    // ── 首启自检（v7.3.0）──────────────────────────────────────
-    /**
-     * 版本数据修正点登记表：每次发版如有「升级后要自动修改的数据」，往这里加一条（幂等）。
-     * 修正点说明见 [VersionFixup]。当前登记：
-     * - 146（7.2.0）起：确保配置默认值完整（initConfigDefaults 幂等，防旧版本缺新增配置项）。
-     * - 71（1.12.0）起：清理单章漫画旧章节残留（旧版单行本 id=sort=1 行与新约定冲突，见
-     *   ChapterDao.deleteLegacySingleChapterRows；删除后离线打开自动 rebuild 为「全一话」）。
-     */
-    private val versionFixups = listOf(
-        VersionFixup(
-            appliesFrom = 146,
-            summary = "补齐配置默认值",
-            run = { repo -> repo.initConfigDefaults() }
-        ),
-        VersionFixup(
-            appliesFrom = 71,
-            summary = "清理单章漫画旧章节残留",
-            run = { repo -> repo.purgeSingleChapterLegacyRows() }
-        )
-    )
-
-    /** 关键配置项集合：配置一致性检查用（缺失即自动补齐并登记）。 */
-    private val requiredConfigKeys = listOf(
-        "max_concurrent_downloads", "image_quality", "library_sort",
-        "finished_in_library", "download_after", "sub_auto_download", "bookshelf_columns"
-    )
-
-    /**
-     * 首启自检（v7.3.0）：版本升级后第一次进入 App 时运行（MainActivity 用 data_audit_version 门控）。
-     * ① 执行版本数据修正点（登记式）→ ② 数据体检已退役（v1.12.0 单表，无位一致性可补）
-     * → ③ 故障识别：Python 桥接健康 / 数据一致性 / 存储目录可用性。
-     * 幂等、纯本地、无网络；返回报告供 UI 弹窗。
-     */
-    suspend fun runStartupSelfCheck(fromVersion: Int): StartupCheckReport {
-        val fixed = mutableListOf<String>()
-        val faults = mutableListOf<String>()
-
-        // ① 版本修正点（仅跑比升级前版本新的）
-        for (fx in versionFixups.filter { it.appliesFrom > fromVersion }) {
-            runCatching { fx.run(this) }
-                .onSuccess { fixed += fx.summary }
-                .onFailure { faults += "修正「${fx.summary}」失败：${it.message}" }
-        }
-
-        // ② 数据体检退役（v1.12.0 单表重构：位掩码一致性核对的对象已不存在；
-        //    三表合一迁移在 Room MIGRATION_13_14 里一次性完成）
-
-        // ③ 故障识别
-        checkPythonHealth(faults)
-        checkConfigHealth(fixed, faults)
-        checkBooksHealth(faults)
-        checkStorageHealth(faults)
-
-        return StartupCheckReport(
-            versionFrom = fromVersion,
-            versionTo = BuildConfig.VERSION_CODE,
-            autoFixed = fixed,
-            faults = faults
-        )
-    }
-
-    /**
-     * v1.4.0：Chaquopy 已移除，原无 Python 健康检查。
-     *
-     * 原实现是启动时探测 Python 解释器是否就绪（`awaitPythonStart` + `PythonBridge.isReady`），
-     * 未就绪就报「搜索/下载/推荐不可用」。现在全链路原生，**没有需要探测的运行时**，
-     * 因此改为探测 API 线路是否可用（更有意义：线路全挂时搜索/详情/下载都会失败）。
-     */
-    private suspend fun checkPythonHealth(faults: MutableList<String>) {
-        val ok = runCatching {
-            JmApiHost.current() != null
-        }.getOrDefault(false)
-        if (!ok) faults += "接口线路不可用（搜索 / 详情 / 下载将失败，请检查网络）"
-    }
-
-    private suspend fun checkConfigHealth(fixed: MutableList<String>, faults: MutableList<String>) {
-        runCatching {
-            val all = config.getAllConfig()
-            val missing = requiredConfigKeys.filter { all[it].isNullOrBlank() }
-            if (missing.isEmpty()) return@runCatching
-            initConfigDefaults()
-            val after = config.getAllConfig()
-            val still = requiredConfigKeys.filter { after[it].isNullOrBlank() }
-            if (still.isEmpty()) fixed += "补齐缺失配置：${missing.joinToString("、")}"
-            else faults += "配置表仍缺关键项：${still.joinToString("、")}"
-        }.onFailure { faults += "配置表读取异常：${it.message}" }
-    }
-
-    private suspend fun checkBooksHealth(faults: MutableList<String>) {
-        val ok = runCatching { bookDao.observeAll().first() }.isSuccess
-        if (!ok) faults += "本地书架数据读取异常（数据库可能损坏）"
-    }
-
-    private fun checkStorageHealth(faults: MutableList<String>) {
-        if (!dirWritable(saveDir)) faults += "下载目录不可写：$saveDir"
-        if (!dirWritable(cacheDir)) faults += "缓存目录不可写：$cacheDir"
-        val free = runCatching { StatFs(saveDir).availableBytes }.getOrDefault(Long.MAX_VALUE)
-        if (free < MIN_FREE_BYTES) {
-            faults += "存储空间不足（剩余 ${free / 1024 / 1024}MB，下载大本可能失败）"
-        }
-    }
-
-    private fun dirWritable(path: String): Boolean = runCatching {
-        val f = File(path)
-        if (!f.exists()) f.mkdirs()
-        f.isDirectory && f.canWrite()
-    }.getOrDefault(false)
-
     private companion object {
-        /** 存储可用空间警戒线：低于 100MB 提示（避免整本下载中途失败）。 */
-        const val MIN_FREE_BYTES = 100L * 1024 * 1024
-
-        /** v1.1.0：搜索是否优先走同源 JSON 接口；置 false 即整体回退 Python 旧链路。 */
-        const val USE_API_SEARCH = true
-
         /** 图片请求 UA（v1.4.0：随 Chaquopy 移除后，封面下载改由原生 OkHttp 发起）。 */
         const val IMG_UA =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) " +

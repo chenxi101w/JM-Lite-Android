@@ -1,35 +1,35 @@
 ﻿package com.example.jmreader.data.repository
 
-import com.example.jmreader.data.local.BlacklistDao
 import com.example.jmreader.data.local.Book
 import com.example.jmreader.data.local.BookDao
-import com.example.jmreader.data.local.TagLibraryDao
-import com.example.jmreader.data.local.normalizeAuthorName
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
+
+/**
+ * 作者名归一化（v1.17.0 起随屏蔽功能下线，从 data/local/ComicStatus.kt 迁入此处）。
+ * 去首尾空白、转小写、合并内部空白。
+ */
+internal fun normalizeAuthorName(a: String): String =
+    a.trim().lowercase().replace(Regex("\\s+"), "")
 
 /**
  * 漫画账本（v1.12.0 单表重构）：`comics` 一行 = 一本「看过」的漫画，行永不因删本地而删除。
  *
- * 由 BookStatusStore（comic_status 位掩码登记表）重写而来——位掩码退役，状态全部列化，
- * 本类是**唯一写入点**：看完/收藏/拉黑/登记看过都必须走这里（或其转发的 BookDao 定向 UPDATE），
+ * 本类是**唯一写入点**：看完/收藏/登记看过都必须走这里（或其转发的 BookDao 定向 UPDATE），
  * 禁止再出现「books 副本 + 账本副本」双写（v1.11.x 数据漂移的根因）。
  *
  * 状态语义（用户心智模型 2026-10-08 定稿）：
- *  - 行存在 = 看过（打开过详情/阅读器/下载过/收藏过/拉黑过，含云同步拉回的号）；
- *  - favorite/finished/blocked = 看过范围内的三个独立标记；「没看完」= finished 的补集，无列；
- *  - localDir（Kotlin 字段 savedDir）= 物理下载状态，空 = 不在本地；「下载过」不再作为分类维度；
- *  - lastChapterId/lastPageIndex/lastReadAt = 阅读记忆（原 read_progress 表并入）；
- *  - recycleAt/trashed = 回收站宽限期标记（原 comic_status.ext JSON 列化）。
+ *  - 行存在 = 看过（打开过详情/阅读器/下载过/收藏过，含云同步拉回的号）；
+ *  - favorite/finished = 看过范围内的两个独立标记；「没看完」= finished 的补集，无列；
+ *  - localDir（Kotlin 字段 savedDir）= 物理下载状态，空 = 不在本地；
+ *  - lastChapterId/lastPageIndex/lastReadAt = 阅读记忆（原 read_progress 表并入）。
  *
- * @param bookDao       comics 表 dao（账本本体）
- * @param blacklistDao  blacklists 表 dao（作品级拉黑兜底判定）
- * @param tagLibraryDao tag_library 表 dao（保留注入：标签录入补偿的扩展点）
+ * v1.17.0 轻量化：拉黑（blocked 列 + blacklists 表）与标签库依赖一并下线，
+ * 构造函数不再需要 BlacklistDao / TagLibraryDao。
+ *
+ * @param bookDao comics 表 dao（账本本体）
  */
 class ComicLedger(
-    private val bookDao: BookDao,
-    private val blacklistDao: BlacklistDao,
-    private val tagLibraryDao: TagLibraryDao
+    private val bookDao: BookDao
 ) {
 
     // ── 读 ──────────────────────────────────────────────────
@@ -39,13 +39,6 @@ class ComicLedger(
 
     /** 某本账本行（null = 从未看过/未同步）。 */
     suspend fun get(bookId: Int): Book? = bookDao.get(bookId)
-
-    /** 作品/作者是否被拉黑：行 blocked 列 + blacklists 作品条目兜底（作者级在 blacklists）。 */
-    suspend fun isBookBlocked(bookId: Int): Boolean {
-        if (bookDao.get(bookId)?.blocked == 1) return true
-        val blacklists = blacklistDao.observeAll().first()
-        return blacklists.any { it.type == "work" && it.value.toIntOrNull() == bookId }
-    }
 
     // ── 写（唯一写入点）──────────────────────────────────────
 
@@ -75,22 +68,6 @@ class ComicLedger(
         bookDao.setFavorite(bookId, if (favorite) 1 else 0)
     }
 
-    /** 拉黑标记（作品级；用户改 blacklists 后由门面调这里同步列）。 */
-    suspend fun setBlocked(bookId: Int, blocked: Boolean) {
-        ensureRow(bookId)
-        bookDao.setBlocked(bookId, if (blocked) 1 else 0)
-    }
-
-    /** 一键拉黑作者：该作者全部账本行 blocked 列置/清（归一化匹配，兼容 raw author）。 */
-    suspend fun syncBlockedForAuthor(author: String, blocked: Boolean) {
-        val norm = normalizeAuthorName(author)
-        bookDao.getAll().forEach { b ->
-            if (normalizeAuthorName(b.author) == norm) {
-                bookDao.setBlocked(b.id, if (blocked) 1 else 0)
-            }
-        }
-    }
-
     // ── 删除 / 隐私 ─────────────────────────────────────────
 
     /** 彻底删除某本账本行（隐私入口；真删——书架行同样消失，调用方须二次确认）。 */
@@ -101,19 +78,10 @@ class ComicLedger(
     /**
      * 清空阅读画像（设置页隐私入口）：
      *  - 不在本地且未收藏的纯账本行 → 整行删（浏览痕迹清除）；
-     *  - 在架/收藏行 → 保留行与 finished/favorite/blocked，只清阅读记忆（viewCount/进度/lastReadAt）。
+     *  - 在架/收藏行 → 保留行与 finished/favorite，只清阅读记忆（viewCount/进度/lastReadAt）。
      */
     suspend fun clearReadingProfile() {
         bookDao.deleteLedgerOnlyRows()
         bookDao.clearReadingMemory()
     }
-
-    // ── 标签库标记（v5.8.0 TAGS_RECORDED 位的单表等价实现）────────
-
-    /**
-     * 标签是否已录入标签库：位掩码退役后以「行存在且 tags 非空」判定——
-     * 有真实标签才有东西可录；调用方（BookTagEngine）先查 tags 本身，本判定只做兜底去重。
-     */
-    suspend fun hasTagsRecorded(bookId: Int): Boolean =
-        bookDao.get(bookId)?.tags?.isNotBlank() == true
 }

@@ -49,26 +49,16 @@ class ConfigManager(
         "reader_auto_finish_percent" to "90",  // 阅读进度达该百分比自动算看完（1~100）
         "reader_auto_delete_chapter" to "0",   // 章节读完自动删除本章本地图片（默认关）
         "reader_auto_delete_chapter_delay" to "30", // 读完自动删本章的宽限期（秒）：退出阅读器后延迟删除，重入同本取消
-        // v7.1.0：整本「看完自动删除」/「不删」机制已由回收站取代（看完整本自动进回收站，7 天未拾回彻底删除），配置项移除
-        // ── 喜欢系统（v2.4.3）──
-        "pref_max_tags" to "10",               // 主喜欢标签上限：计算出的标签按权重取前 N 个为主喜欢(偏重90)，其余隐藏为微喜欢(偏重10)
-        "manual_preferred_tags" to "",         // 手动喜欢标签（与计算喜欢独立存储，推荐/搜索优先偏重）
-        // ── 3.0.0 智能关联拓展（P2/P3：全局总开关 + 喜欢红线 + 可插拔策略）──
-        "smart_association" to "1",            // 全局总开关：喜欢加权 / 同义词展开 / 名称特征 / 推荐增强 的总闸；0 = 全部退化为无喜欢纯列表
-        "pref_min_hits" to "1",                // 喜欢红线：标签/名称特征需在收藏样本里出现至少 N 次才计入喜欢（过滤单次噪声）
-        "search_strategy" to "classic",        // 搜索排序策略：classic 权重累加 / binary 命中优先（不区分权重高低）
-        "recommend_strategy" to "classic",     // 推荐排序策略（当前仅 classic 一种）
-        // ── 5.0.19 新增：用户可决定的「无关标签」体系 ──
-        "default_irrelevant_tags" to
-            "中文,简中,汉化,翻译,简体,繁体,英文,日文,韩文,多语言,全彩,黑白,单行本,合集,短篇,长篇,系列,分卷,修正,扫描", // 默认无关标签（非核心属性，可改）
-        "ignored_tags" to "",                  // 用户在标签库手动标记的无关标签（逗号分隔，可改）
-        "hide_irrelevant_tags" to "0",         // 1 = 隐藏无关标签（标签库 / 搜索屏蔽菜单不再显示）
-        // ── v7.2.0 新增：订阅作者新作自动下载 ──
-        "sub_auto_download" to "0",            // 1 = 发现订阅作者新作时自动下载到书架
+        // v1.17.0 轻量化：整本「看完自动删除」机制随回收站下线；喜欢/讨厌标签体系、无关标签、
+        // 智能关联（同义词展开 + 喜欢加权排序）、订阅新作自动下载的默认配置键一并移除。
+        // 数据库里已写入的旧键是惰性残留（无读取方），不主动清——留着不影响运行。
         // ── v1.10.0 云同步（JmSyncManager）：看过的漫画 JM 号备份到用户自有服务器 ──
+        // ⚠️ v1.17.1：服务器地址与密钥**不再硬编码**（原先是明文写在源码里的真实地址与密钥，
+        // 一旦推上公开仓库就等于公开凭据）。出厂一律留空，由用户在
+        // 设置 → 书架 → 云同步卡片里填一次，配置落 system_config 表，不进版本库。
         "sync_enabled" to "0",                 // 1 = 启用（启动静默同步 + 设置页手动同步）
-        "sync_server_url" to "http://your-server:8765",   // 用户阿里云 ECS
-        "sync_token" to "SYNC_TOKEN_PLACEHOLDER", // 服务器鉴权密钥（credentials.txt）
+        "sync_server_url" to "",              // 用户自有服务器地址（如 https://sync.example.com）
+        "sync_token" to "",                   // 服务器鉴权密钥
         "sync_last_at" to "0",                 // 上次成功同步时间戳 ms（0 = 从未成功）
         "sync_last_result" to ""               // 上次同步结果描述（UI 直接显示）
     )

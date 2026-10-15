@@ -59,14 +59,12 @@ class LibraryViewModel(private val repo: JmRepository) : ViewModel() {
         return Routes.detail(book.id)
     }
 
-    /** 回收站条目数（v1.15.0：书架「回收站」入口角标）。 */
-    val trashCount: StateFlow<Int> = repo.observeTrashed()
-        .map { it.size }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
-
-    /** 删除漫画（v1.15.0：删本地内容并进回收站，7 天内可在回收站恢复 / 彻底删除）。 */
+    /**
+     * 删除漫画（v1.17.0 轻量化）：**彻底删除** —— 本地文件 + 下载记录 + 阅读记忆 + 账本行全清。
+     * 回收站已下线，不再有「7 天内可恢复」这一步。
+     */
     fun removeBook(bookId: Int) {
-        viewModelScope.launch { runCatching { repo.trashBook(bookId) } }
+        viewModelScope.launch { runCatching { repo.removeBookCompletely(bookId) } }
     }
 
     /** 标记看完 / 取消看完（看完的漫画在书架沉底并带「已看完」分隔线）。 */
@@ -120,7 +118,7 @@ class LibraryViewModel(private val repo: JmRepository) : ViewModel() {
     }
 
     /**
-     * 批量删除（v1.15.0：与单本删除同语义 = 删本地并进回收站，可恢复 / 彻底删除）。
+     * 批量删除（v1.17.0：与单本删除同语义 = 彻底删除，不可恢复）。
      * 逐本串行删，单本失败不影响其余；完成后回调成功数（UI toast）并退出多选。
      */
     fun removeSelected(onDone: (Int, Int) -> Unit) {
@@ -129,7 +127,7 @@ class LibraryViewModel(private val repo: JmRepository) : ViewModel() {
         viewModelScope.launch {
             var ok = 0
             for (id in ids) {
-                runCatching { repo.trashBook(id) }.onSuccess { ok++ }
+                runCatching { repo.removeBookCompletely(id) }.onSuccess { ok++ }
             }
             clearSelection()
             onDone(ok, ids.size)

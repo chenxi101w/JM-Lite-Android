@@ -6,9 +6,6 @@ import com.example.jmreader.data.local.AppDatabase
 import com.example.jmreader.data.local.Book
 import com.example.jmreader.data.local.Chapter
 import com.example.jmreader.data.local.SystemConfig
-import com.example.jmreader.data.local.TagLibrary
-import com.example.jmreader.data.local.Subscription
-import com.example.jmreader.data.local.SubscriptionUpdate
 import com.example.jmreader.data.mapper.toBook
 import com.example.jmreader.data.mapper.toChapter
 import java.io.File
@@ -38,24 +35,11 @@ class BookLibrary(
     private val bookDao = db.bookDao()
     private val chapterDao = db.chapterDao()
     private val downloadDao = db.downloadDao()
-    private val blacklistDao = db.blacklistDao()
     private val configDao = db.systemConfigDao()
-    private val tagLibraryDao = db.tagLibraryDao()
-    private val subscriptionDao = db.subscriptionDao()
-    private val aliasDao = db.aliasDao()
-
-    // v7.0.0：作者订阅的实现搬到 BookSubscriptionManager。
-    // 用 lazy 而非直接初始化：它要通过 search() 联网查作者作品，而 search 是本类成员，
-    // 属性初始化器里调用成员函数时 this 尚未构造完，lazy 推迟到首次访问更安全。
-    private val subscriptions by lazy {
-        BookSubscriptionManager(subscriptionDao, bookDao) { kw, mode, page, orderBy, time ->
-            search(kw, mode, page, orderBy, time)
-        }
-    }
 
     // v1.12.0：漫画账本（原 BookStatusStore 位掩码逻辑重写为 ComicLedger，唯一写入点）。
     private val ledger by lazy {
-        ComicLedger(bookDao, blacklistDao, tagLibraryDao)
+        ComicLedger(bookDao)
     }
 
     // v7.0.0：看完自动删除 + 「不删」标记逻辑搬到 BookAutoDeleteManager。注入真正需要的 dao / 回调，
@@ -71,26 +55,14 @@ class BookLibrary(
         )
     }
 
-    // v7.0.0：标签库 / 偏好推荐相关逻辑搬到 BookTagEngine。注入它真正需要的 dao / 配置 / 账本。
-    private val tagEngine by lazy {
-        BookTagEngine(
-            bookDao = bookDao,
-            blacklistDao = blacklistDao,
-            configDao = configDao,
-            tagLibraryDao = tagLibraryDao,
-            aliasDao = aliasDao,
-            configProvider = configProvider,
-            ledger = ledger
-        )
-    }
-
     // ── 在线抓取 ──────────────────────────────────────────────
 
     /**
      * 搜索漫画。
      * mode: keyword | author | tags | combined | jmid
      * orderBy 取值：mr 最新 / mv 浏览 / mp 收藏 / tr 标题；time 取值：a 全部 / t 今天 / w 本周 / m 本月
-     * tagsLogic: or | and；tagsJson: 标签数组 JSON；aliasesJson/blocksJson 由 DB 生成。
+     * tagsLogic: or | and；tagsJson: 标签数组 JSON。
+     * v1.17.0：aliasesJson / blocksJson 两个入参随别名、屏蔽功能下线删除（本就没被函数体用到）。
      */
     suspend fun search(
         keyword: String,
@@ -100,9 +72,6 @@ class BookLibrary(
         time: String = "a",
         tagsLogic: String = "or",
         tagsJson: String = "",
-        aliasesJson: String = "",
-        blocksJson: String = "",
-        smartAssociation: Boolean = true
     ): List<Book> {
         // v1.4.0：Chaquopy 已移除 → 纯原生。
         // 只支持「纯关键词」这一档（与原先 JmRepository 的 USE_API_SEARCH 条件一致）：
@@ -246,28 +215,6 @@ class BookLibrary(
         runCatching { chapterDao.deleteLegacySingleChapterRows() }
             .getOrElse { Log.w("BookLibrary", "单章残留清理失败：${it.message}"); 0 }
 
-    // ── 回收站（v7.1.0）：看完/手动删除进回收站 + 7 天自动彻底删除 ──
-    private val recycle by lazy {
-        RecycleManager(
-            bookDao = bookDao,
-            deleteLocalKeepBookFn = { autoDelete.deleteLocalKeepBook(it) },
-            removeBookCompletelyFn = { removeBookCompletely(it) }
-        )
-    }
-    /** 全量 books 流（含回收站项 savedDir 已清空），供书架展示「回收站角标」分区。 */
-    fun observeAllBooks(): Flow<List<Book>> = bookDao.observeAll()
-    /** 看完标号：写宽限期（v7.1.3，不删本地，7 天没再看才删）。 */
-    suspend fun markFinishedRecycle(bookId: Int) = recycle.markFinishedRecycle(bookId)
-    /** 宽限期内再阅读：续期 7 天。 */
-    suspend fun renewRecycle(bookId: Int) = recycle.renewRecycle(bookId)
-    /** 手动删除进回收站：立即删本地 + 标记。 */
-    suspend fun trashBook(bookId: Int) = recycle.trashBook(bookId)
-    suspend fun restoreFromRecycle(bookId: Int) = recycle.restoreBook(bookId)
-    suspend fun deleteFromRecycle(bookId: Int) = recycle.deleteFromRecycle(bookId)
-    fun observeTrashed(): Flow<List<RecycleManager.TrashItem>> = recycle.observeTrashed()
-    suspend fun checkRecycleExpiry() = recycle.checkRecycleExpiry()
-    fun recycleRetentionDays(): Int = recycle.RETENTION_DAYS
-
     /** 写入/更新一本漫画的书架记录（搜索结果直接下载时，先把图书落到 books 表）。
      *  若该书已存在（例如之前已下载到本地书架），保留其 savedDir，避免联网详情覆盖导致本地记录「消失」。 */
     suspend fun saveBook(book: Book) {
@@ -299,10 +246,6 @@ class BookLibrary(
      * 与「屏蔽所有下载过的」都能稳定成立。
      * @param touchRead 为 true 时刷新 lastReadAt（发生实际阅读），否则沿用旧值（如下载/仅落库）。
      */
-    /** 某漫画是否已被拉黑（v5.11.0，阅读器「拉黑/删除处理」用）：
-     *  账本 blocked 列 + blacklists 作品条目兜底，双保险。实现已在 ComicLedger。 */
-    suspend fun isBookBlocked(bookId: Int): Boolean = ledger.isBookBlocked(bookId)
-
     /**
      * 删除一本漫画的本地内容（用户主动「删除本地」走这里）。
      * **v1.12.0 单表语义**：账本行永不删（行即「看过」历史，元数据/进度/标记全保留），
@@ -340,7 +283,7 @@ class BookLibrary(
         bookDao.get(bookId)?.let {
             bookDao.upsert(
                 it.copy(
-                    savedDir = "", cached = 0, recycleAt = 0, trashed = 0,
+                    savedDir = "", cached = 0,
                     viewCount = 0, lastReadAt = 0, lastChapterId = 0, lastPageIndex = 0
                 )
             )
@@ -364,9 +307,6 @@ class BookLibrary(
     /** 清空阅读画像（纯账本行删除 + 在架/收藏行清阅读记忆，标记保留）。 */
     suspend fun clearReadingProfile() = ledger.clearReadingProfile()
 
-    /** 该漫画标签是否已录入标签库（v1.12.0 起以「行存在且 tags 非空」判定）。 */
-    suspend fun hasTagsRecorded(bookId: Int): Boolean = ledger.hasTagsRecorded(bookId)
-
     /**
      * 启动数据体检退役（v1.12.0）：位掩码一致性核对的对象（comic_status）已随单表重构消失，
      * 迁移在 Room MIGRATION_13_14 一次性完成；单表后状态唯一写入点收敛于 ComicLedger，无漂移可补。
@@ -386,16 +326,6 @@ class BookLibrary(
             }
     }
 
-    // v1.12.0：setStatusBits/clearStatusBits（位掩码）随单表退役，
-    // 看完/收藏走 setFinished/setFavorite 列写，拉黑走下面两个 blocked 列写。
-
-    /** 同步某本漫画的拉黑（用户改 blacklists 后调用）：置/清 blocked 列。 */
-    suspend fun syncBlockedBit(bookId: Int, blocked: Boolean) = ledger.setBlocked(bookId, blocked)
-
-    /** 同步某作者的拉黑（用户一键拉黑作者后调用）：该作者全部账本行 blocked 列置/清（归一化匹配）。 */
-    suspend fun syncBlockedForAuthor(author: String, blocked: Boolean) =
-        ledger.syncBlockedForAuthor(author, blocked)
-
     // ── 读完自动删本章（4.2.4，v7.1.0 保留；整本「看完自动删除」已由回收站取代）──
 
     /** 退出阅读器时调用：若开启「读完自动删本章」，延迟后删除该本所有已读完章节的本地图片；重入会先取消旧的。实现已搬到 BookAutoDeleteManager，此处仅转发，签名不变。 */
@@ -403,29 +333,6 @@ class BookLibrary(
 
     /** 重新打开某本漫画时调用：取消其待执行的章节自动删除（重入即取消）。实现已搬到 BookAutoDeleteManager，此处仅转发，签名不变。 */
     fun cancelPendingChapterDelete(bookId: Int) = autoDelete.cancelPendingChapterDelete(bookId)
-
-    /**
-     * 删除某本漫画的本地图片，但**保留 books 行与下载记录**（savedDir 清空、cached 归零、finished 保留），
-     * 供「回收站进站」（v7.1.0）显式清理。4.2.0 起不再删 downloadDao（下载记录保留，供「下载管理/重新下载」查阅）。
-     * 实现已搬到 BookAutoDeleteManager，此处仅转发，签名不变。
-     */
-    suspend fun deleteLocalKeepBook(bookId: Int) = autoDelete.deleteLocalKeepBook(bookId)
-
-    // ── 作者订阅（v7.0.0：实现已搬到 BookSubscriptionManager，此处仅转发）──
-    suspend fun addSubscription(author: String): Boolean = subscriptions.addSubscription(author)
-    suspend fun removeSubscription(id: Int) = subscriptions.removeSubscription(id)
-    fun observeSubscriptions(): Flow<List<Subscription>> = subscriptions.observeSubscriptions()
-    suspend fun clearSubscriptionNew(id: Int) = subscriptions.clearSubscriptionNew(id)
-    suspend fun clearAllSubscriptions() = subscriptions.clearAllSubscriptions()
-    // v7.2.0：下层返回新作列表（供 JmRepository 取数量 / 自动下载新作）
-    suspend fun checkSubscriptionsForUpdates(): List<Book> = subscriptions.checkSubscriptionsForUpdates()
-    fun observeSubscriptionUpdates(): Flow<List<SubscriptionUpdate>> =
-        subscriptions.observeSubscriptionUpdates()
-    fun observeUnseenUpdates(): Flow<List<SubscriptionUpdate>> = subscriptions.observeUnseenUpdates()
-    suspend fun markUpdateSeen(bookId: Int) = subscriptions.markUpdateSeen(bookId)
-    suspend fun markAllUpdatesSeen() = subscriptions.markAllUpdatesSeen()
-    suspend fun removeSubscriptionAndUpdates(id: Int, author: String) =
-        subscriptions.removeSubscriptionAndUpdates(id, author)
 
     suspend fun saveProgress(bookId: Int, chapterId: Int, pageIndex: Int) {
         // v1.12.0：阅读记忆并入账本行（原 read_progress 表退役）。行缺失先兜底落行。
@@ -683,106 +590,7 @@ class BookLibrary(
         return sb.toString()
     }
 
-    // ── 标签库 / 偏好推荐（v7.0.0：实现已搬到 BookTagEngine，此处仅转发，签名不变）──
-
-    /** 无关性标签判定：结构规则 + 默认无关 + 用户手动无关，任一命中即视为无关。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun isIrrelevantTag(tag: String): Boolean = tagEngine.isIrrelevantTag(tag)
-    /** 默认无关标签集合（config `default_irrelevant_tags`）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getDefaultIrrelevantTags(): Set<String> = tagEngine.getDefaultIrrelevantTags()
-    /** 用户手动标记的无关标签集合（config `ignored_tags`）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getIgnoredTags(): Set<String> = tagEngine.getIgnoredTags()
-    /** 持久化用户手动无关标签集合（config `ignored_tags`）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun setIgnoredTags(tags: Set<String>) = tagEngine.setIgnoredTags(tags)
-    /** 切换某标签的用户手动无关状态（在/不在 ignored_tags 间切换）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun toggleIgnoredTag(tag: String) = tagEngine.toggleIgnoredTag(tag)
-    /** 是否开启「隐藏无关标签」（config `hide_irrelevant_tags` == "1"）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun isHideIrrelevantEnabled(): Boolean = tagEngine.isHideIrrelevantEnabled()
-    /** 设置「隐藏无关标签」开关。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun setHideIrrelevant(on: Boolean) = tagEngine.setHideIrrelevant(on)
-
-    /** 汇总统计（v4.14.0）：拉黑漫画 / 收藏漫画的标签出现次数（降序）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun aggregateComicTags(scope: String, cap: Int = 30): List<Pair<String, Int>> =
-        tagEngine.aggregateComicTags(scope, cap)
-
-    /** 标题名称特征（关键字分词）单独计分。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun computeNameFeatureTags(): List<Pair<String, Int>> = tagEngine.computeNameFeatureTags()
-
-    /** 搜索结果写入标签库：每本漫画的每个标签各 +1。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun addSearchTags(tags: List<String>) = tagEngine.addSearchTags(tags)
-    /** 只读获取某漫画的真实标签（不落库），供搜索结果后台补抓标签库。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getAlbumTags(albumId: Int): List<String> = tagEngine.getAlbumTags(albumId)
-    /** 搜索结果后台补抓标签：对空 tags 且未录入的本逐本抓详情补标签入库。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun enrichTagLibraryFromSearch(books: List<Book>, cap: Int = 15) =
-        tagEngine.enrichTagLibraryFromSearch(books, cap)
-    /** 标签库响应式流（按数量降序）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    fun observeTagLibrary(): Flow<List<TagLibrary>> = tagEngine.observeTagLibrary()
-    /** 合并标签集（v5.6.1）：兴趣库 ∪ 本地书架漫画的全部标签，按出现次数降序。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    fun observeMergedTagLibrary(): Flow<List<Pair<String, Int>>> = tagEngine.observeMergedTagLibrary()
-    /** 标签库快照（按数量降序）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getTagLibrary(): List<TagLibrary> = tagEngine.getTagLibrary()
-    /** 清空标签库（设置页「清空标签库」）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun clearTagLibrary() = tagEngine.clearTagLibrary()
-
-    /** 全局总开关「智能关联拓展」是否开启（默认开）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun isSmartAssociationEnabled(): Boolean = tagEngine.isSmartAssociationEnabled()
-    /** 喜欢红线阈值：标签/名称特征需在收藏样本里出现至少 N 次才计入（默认 1）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getMinHits(): Int = tagEngine.getMinHits()
-    /** 收藏样本数（喜欢正样本 = favorite==1 的漫画数）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun countFavorites(): Int = tagEngine.countFavorites()
-    /** 喜欢样本库（收藏漫画 + 名称特征，实时派生、不落库）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun computePreferredTags(): List<Pair<String, Int>> = tagEngine.computePreferredTags()
-    /** 当前生效的喜欢标签（手动 ∪ 计算）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getPreferredTags(): Set<String> = tagEngine.getPreferredTags()
-    /** 当前生效的讨厌标签（config `hated_tags`）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getHatedTags(): Set<String> = tagEngine.getHatedTags()
-    /** 持久化手动讨厌标签（config `hated_tags`，逗号分隔）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun saveHatedTags(tags: List<String>) = tagEngine.saveHatedTags(tags)
-    /** 标签两两相关性（共现计数，同义词归一）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun computeTagCorrelations(minScore: Int = 2): List<TagCorrelation> =
-        tagEngine.computeTagCorrelations(minScore)
-    /** 相关标签分组（并查集）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun groupCorrelatedTags(): List<List<String>> = tagEngine.groupCorrelatedTags()
-    /** 一键分类拟案。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun proposeCategories(minBooks: Int = 3, topN: Int = 8): List<CategoryProposal> =
-        tagEngine.proposeCategories(minBooks, topN)
-    /** 重置喜欢样本（清空手动喜欢与手动讨厌）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun resetPreferenceSample(): Boolean = tagEngine.resetPreferenceSample()
-    /** 主喜欢标签上限（设置 pref_max_tags，默认 10）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getMaxPreferredTags(): Int = tagEngine.getMaxPreferredTags()
-    /** 手动喜欢标签（与计算喜欢独立存储）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getManualPreferredTags(): Set<String> = tagEngine.getManualPreferredTags()
-    /** 持久化手动喜欢标签。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun saveManualPreferredTags(tags: Set<String>) = tagEngine.saveManualPreferredTags(tags)
-    /** 计算喜欢画像（手动 + 主/微喜欢）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getPreferenceProfile(): PreferenceProfile = tagEngine.getPreferenceProfile()
-    /** 喜欢标签权重表（手动=100 / 主=90 / 微=10）。实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    suspend fun getPreferredTagWeights(): Map<String, Int> = tagEngine.getPreferredTagWeights()
-
-    /** 标签相关性结果：alias 为别名（出现较少的那个），canonical 为规范词（出现较多的那个），score=共同出现次数。
-     *  data class 保留在 BookLibrary（外部按 `BookLibrary.TagCorrelation` 引用）。 */
-    data class TagCorrelation(val alias: String, val canonical: String, val score: Int)
-
-    /** 一键分类拟案：categoryName 为拟创建分类名（组内最高频标签），confidence=命中组标签数/组标签总数。
-     *  data class 保留在 BookLibrary（外部按 `BookLibrary.CategoryProposal` 引用）。 */
-    data class CategoryProposal(
-        val categoryName: String,
-        val bookId: Int,
-        val title: String,
-        val confidence: Float
-    )
-
-    /** 喜欢画像：手动喜欢(独立存储) + 计算出的主喜欢(前 N，偏重 90) + 微喜欢(其余隐藏，偏重 10)。
-     *  data class 保留在 BookLibrary（外部按 `BookLibrary.PreferenceProfile` 引用）。 */
-    data class PreferenceProfile(
-        val manual: Set<String>,
-        val primary: Set<String>,
-        val micro: Set<String>
-    )
-
     // ── 书架排序（2.0.0）────────────────────────────────────────
-
-    /** 标签匹配数（排序用）：实现已搬到 BookTagEngine，此处仅转发，签名不变。 */
-    private fun countPreferred(book: Book, preferred: Set<String>): Int = tagEngine.countPreferred(book, preferred)
 
     /**
      * 书架排序：先按 sortMode 排（download 下载时间↓ / views_desc 阅读次数↓ / views_asc 阅读次数↑ /
@@ -797,7 +605,7 @@ class BookLibrary(
         val base = when (sortMode) {
             "views_desc" -> books.sortedByDescending { it.viewCount }
             "views_asc"  -> books.sortedBy { it.viewCount }
-            "preference" -> books.sortedByDescending { countPreferred(it, preferred) }
+            "preference" -> books.sortedByDescending { it.addedAt }   // v1.17.0：标签匹配排序随标签库下线，暂回落为按加入时间
             else         -> books.sortedByDescending { it.addedAt }
         }
         return if (unfinishedFirst) base.sortedBy { it.finished } else base

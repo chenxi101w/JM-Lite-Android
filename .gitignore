@@ -5,3 +5,12 @@ local.properties
 *.jks
 app/build/
 .gradle_home/
+.gradle_home/**/hs_err*.log
+hs_err_pid*.log
+
+# IDE 与本地垃圾
+.idea/
+*.iml
+replay_pid*.log
+# 建错层级的空仓库（用户误在项目内 git init，实际用项目根的仓库）
+JM-Lite-Android/

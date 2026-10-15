@@ -186,11 +186,6 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                                 (cfg["hide_finished_in_search"] ?: "hide") != "off") {
                                 vm.set("hide_finished_in_search", if (it) "hide" else "off")
                             }
-                            Divider()
-                            SwitchRow("智能关联", "按标签偏好调整排序",
-                                (cfg["smart_association"] ?: "1") == "1") {
-                                vm.set("smart_association", if (it) "1" else "0")
-                            }
                         }
                     }
                 }
@@ -327,7 +322,7 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
         SyncEditDialog(
             title = "服务器地址",
             initial = cfg["sync_server_url"] ?: "",
-            hint = "http://your-server:8765",
+            hint = "https://your-server:port",
             onDismiss = { editSyncUrl = false },
             onConfirm = { vm.setSyncServerUrl(it); editSyncUrl = false }
         )

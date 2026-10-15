@@ -27,8 +27,8 @@ import kotlinx.coroutines.flow.stateIn
 class DownloadsViewModel(private val repo: JmRepository) : ViewModel() {
 
     /** 下载记录行：local=true 表示该漫画当前在本地（账本行 savedDir 非空，可离线读）。
-     *  blocked=true 表示该漫画已被拉黑（账本 blocked 列，4.13.0）。 */
-    data class Row(val download: Download, val title: String, val local: Boolean, val blocked: Boolean = false)
+     */
+    data class Row(val download: Download, val title: String, val local: Boolean)
 
     /** 是否连「已隐藏」的下载记录一起显示（设置里下载后行为=自动隐藏时会产生隐藏记录）。 */
     private val _showHidden = MutableStateFlow(false)
@@ -37,7 +37,7 @@ class DownloadsViewModel(private val repo: JmRepository) : ViewModel() {
 
     val rows: StateFlow<List<Row>> =
         combine(repo.observeDownloads(), repo.observeBooks(), _showHidden) { dls, books, showHidden ->
-            // v1.12.0 单表：books 流即账本全量（含已删本地的行），title 兜底/blocked/local 全部从行上取
+            // v1.12.0 单表：books 流即账本全量（含已删本地的行），title 兜底/local 全部从行上取
             val bookById = books.associateBy { it.id }
             dls.filter { showHidden || it.hidden == 0 }
                 .map { dl ->
@@ -45,8 +45,7 @@ class DownloadsViewModel(private val repo: JmRepository) : ViewModel() {
                     Row(
                         dl,
                         b?.title?.takeIf { it.isNotBlank() } ?: "JM-${dl.bookId}",
-                        local = b != null && b.savedDir.isNotBlank(),
-                        blocked = b?.blocked == 1
+                        local = b != null && b.savedDir.isNotBlank()
                     )
                 }
                 // v14：三流合并 + 建全表 Map 的开销挪出主线程

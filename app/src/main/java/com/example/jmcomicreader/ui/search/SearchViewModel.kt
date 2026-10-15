@@ -24,7 +24,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.util.Log
 
 class SearchViewModel(private val repo: JmRepository) : ViewModel() {
 
@@ -137,27 +136,6 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
-    /**
-     * 讨厌标签集合（推荐/搜索中排除，与屏蔽并列）。
-     * 由配置表响应式流派生：设置页改「讨厌标签」后返回搜索页即实时刷新（修复 #2 数据陈旧）。
-     */
-    val hatedTags: StateFlow<Set<String>> = repo.observeConfigAll()
-        .map { repo.getHatedTags() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
-
-    /**
-     * 喜欢标签权重表（手动=100/主喜欢=90/微喜欢=10），用于搜索结果喜欢加权排序。
-     * 同样由配置表响应式流派生，手动喜欢变更后实时生效（修复 #2 数据陈旧）。
-     */
-    private val prefWeights: StateFlow<Map<String, Int>> = repo.observeConfigAll()
-        .map { runCatching { repo.getPreferredTagWeights() }.getOrElse { e -> Log.e("SearchViewModel", "getPreferredTagWeights failed", e); emptyMap() } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
-
-    /** 全局总开关「智能关联拓展」：关闭时不向搜索注入同义词、不做喜欢加权排序（退化为无喜欢纯列表）。 */
-    val smartAssociation: StateFlow<Boolean> = repo.observeConfigAll()
-        .map { (repo.getConfig("smart_association") ?: "1") != "0" }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
-
     /** 搜索排序策略：classic 权重累加 / binary 命中优先。随设置实时变化。 */
     val searchStrategy: StateFlow<String> = repo.observeConfigAll()
         .map { repo.getConfig("search_strategy") ?: "classic" }
@@ -245,16 +223,6 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
         }
     }
 
-    // ── 长按拉黑（blacklists，讨厌标记；不隐藏搜索结果，供喜欢/讨厌算法用）──
-    fun blacklistWork(book: Book) = viewModelScope.launch { repo.addBlacklist("work", book.id.toString()) }
-    fun blacklistAuthor(book: Book) = viewModelScope.launch { repo.addBlacklist("author", book.author) }
-
-    /** 同时拉黑作品和作者（v7.0.6 长按菜单组合项，一次完成两件事）。 */
-    fun blacklistWorkAndAuthor(book: Book) = viewModelScope.launch {
-        repo.addBlacklist("work", book.id.toString())
-        if (book.author.isNotBlank()) repo.addBlacklist("author", book.author)
-    }
-
     // ── 收藏（搜索结果卡片右上角，v5）：先确保该书已落 books 表（搜索结果未下载时也落一行），
     // 否则 repo.toggleFavorite 因 bookDao.get 返回 null 而整体无效（修复「收藏点了没反应」）。
     fun toggleFavorite(book: Book) = viewModelScope.launch {
@@ -280,25 +248,15 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
             _hideMode.value = repo.getConfig("hide_downloaded_in_search") ?: "hide"
             _hideFinishedMode.value = repo.getConfig("hide_finished_in_search") ?: "hide"
         }
-        // 客户端重过滤：原始结果 / 已下载 / 已看完 / 两个隐藏模式 / 讨厌标签 / 喜欢权重 任一变化即重算可见列表
-        // 注意：combine 超过 5 个流会退回 vararg 重载（transform 仅收一个 Array 参数），需手动拆箱。
-        // 讨厌标签 / 喜欢权重已改为配置表响应式流派生（见上方 hatedTags/prefWeights），改设置返回后实时生效。
-        // 性能：过滤/排序是纯 CPU 计算（字符串 split/正则），移到 Default 线程，避免主线程卡顿。
+        // 客户端重过滤：原始结果 / 已下载 / 已看完 / 两个隐藏模式 任一变化即重算可见列表。
+        // v1.17.0：讨厌标签与喜欢加权排序随标签库/屏蔽功能下线，仅保留接口原序排序。
+        // 性能：过滤是纯 CPU 计算（字符串 split），移到 Default 线程，避免主线程卡顿。
         viewModelScope.launch {
             combine(
-                _rawResults, downloadedIds, finishedIds, hideOpts, hatedTags, prefWeights
-            ) { arr ->
-                val raw = arr[0] as List<Book>
-                val dl = arr[1] as Set<Int>
-                val fin = arr[2] as Set<Int>
-                val opts = arr[3] as HideOpts
-                val hated = arr[4] as Set<String>
-                val weights = arr[5] as Map<String, Int>
+                _rawResults, downloadedIds, finishedIds, hideOpts
+            ) { raw, dl, fin, opts ->
                 withContext(Dispatchers.Default) {
-                    val (visible, grayed) = repo.filterSearchResults(
-                        raw, opts.downloaded, dl, opts.finished, fin, hated
-                    )
-                    sortByPreference(visible, weights, searchStrategy.value) to grayed
+                    repo.filterSearchResults(raw, opts.downloaded, dl, opts.finished, fin)
                 }
             }.collect { (visible, grayed) ->
                 _grayedIds.value = grayed
@@ -318,16 +276,8 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
     private var lastTagsLogic = "or"
     private var lastTagsJson = ""
 
-    /** 搜索结果喜欢加权排序：匹配喜欢标签权重越高越靠前；无匹配保持原顺序（稳定排序）。手动=100/主喜欢=90/微喜欢=10。
-     * strategy=classic 累加权重；strategy=binary 只看是否命中（命中=1，未命中=0），不区分权重高低。 */
-    private fun sortByPreference(results: List<Book>, weights: Map<String, Int> = emptyMap(), strategy: String = "classic"): List<Book> {
-        val w = if (weights.isEmpty()) prefWeights.value else weights
-        if (w.isEmpty()) return results
-        return results.sortedByDescending { book ->
-            val score = book.tags.split("|").map { it.trim().lowercase() }.sumOf { w[it] ?: 0 }
-            if (strategy == "binary") (if (score > 0) 1 else 0) else score
-        }
-    }
+    /** v1.17.0：喜欢加权排序随标签库下线，搜索结果保持接口返回的原始顺序。 */
+    private fun sortByPreference(results: List<Book>): List<Book> = results
 
     /** 新搜索：重置到第一页并替换结果。 */
     fun search(
@@ -412,53 +362,27 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
             }
             val opts = hideOpts.value
             val merged = try {
-                // 同义词 / 拉黑过滤来自本地 DB，注入到 bridge；
-                // 4.13.0：smart_association 关闭时同义词展开一并停用（Python 侧同受开关控制）
-                val aliasesJson = if (smartAssociation.value) repo.getAliasesJson() else ""
                 val page = repo.search(
                     currentKeyword, currentMode, currentPage,
                     orderBy = lastOrderBy, time = lastTime,
-                    tagsLogic = lastTagsLogic, tagsJson = lastTagsJson,
-                    aliasesJson = aliasesJson,
-                    smartAssociation = smartAssociation.value
+                    tagsLogic = lastTagsLogic, tagsJson = lastTagsJson
                 )
                 val prev =
                     if (reset) emptyList() else _rawResults.value
                 val prevIds = prev.map { it.id }.toSet()
                 val newItems = page.filter { it.id !in prevIds }   // 去重：避免只有一页时重复追加
-                // 搜索结果写入标签库：每本漫画的每个标签各 +1（按数量排序，供设置页挑喜欢/讨厌）
-                val searchTags = newItems.flatMap { b ->
-                    b.tags.split("|").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
-                }
                 val merged = prev + newItems
                 // 本页新增条目经客户端过滤（已下载/已看完隐藏）后是否仍有可见项；
                 // 整页被滤光则判到底，避免「加载更多」反复拉空页（修复 #5）
                 val (newVisible, _) = repo.filterSearchResults(
                     newItems, opts.downloaded, downloadedIds.value,
-                    opts.finished, finishedIds.value, hatedTags.value
+                    opts.finished, finishedIds.value
                 )
                 _hasMore.value = newItems.isNotEmpty() && page.isNotEmpty() && newVisible.isNotEmpty()
-                // 写库（搜索历史/标签库）挪到后台异步执行，不再阻塞结果展示：
-                // 结果先出（用户在等封面/列表），写库与后续 UI 渲染并行
-                viewModelScope.launch {
-                    if (reset) runCatching { repo.addSearchHistory(currentMode, currentKeyword, page.size) }
-                    if (searchTags.isNotEmpty()) runCatching { repo.addSearchTags(searchTags) }
-                    // 标签模式：查询的标签本身就是真实标签，直接入库（搜索结果不一定带 tags）
-                    if (currentMode == "tags" && lastTagsJson.isNotBlank()) {
-                        val qt = lastTagsJson
-                            .removeSurrounding("[", "]")
-                            .split(",")
-                            .map { it.trim().removeSurrounding("\"") }
-                            .filter { it.isNotBlank() }
-                        if (qt.isNotEmpty()) runCatching { repo.addSearchTags(qt.map { it.lowercase() }) }
-                    }
-                    // 关键词/作者搜索结果往往不带 tags（jmcomic 搜索接口不返回标签），
-                    // 后台补抓详情取真实标签写入标签库。延迟 2.5s 启动 + 降低封顶：
-                    // 避免「搜索刚返回、用户紧接着再搜/点详情」时被这批 Python 调用排队拖慢
-                    // （Python 单线程队列，15 本串行抓详情会阻塞后续所有搜索/详情请求）。
-                    if (searchTags.isEmpty() && newItems.isNotEmpty()) {
-                        delay(2500)
-                        runCatching { repo.enrichTagLibraryFromSearch(newItems, cap = 8) }
+                // 搜索历史落库挪到后台，不阻塞结果展示
+                if (reset) {
+                    viewModelScope.launch {
+                        runCatching { repo.addSearchHistory(currentMode, currentKeyword, page.size) }
                     }
                 }
                 merged
@@ -472,11 +396,11 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
             val (rawVisible, grayed) = withContext(Dispatchers.Default) {
                 val (v, g) = repo.filterSearchResults(
                     merged, opts.downloaded, downloadedIds.value,
-                    opts.finished, finishedIds.value, hatedTags.value
+                    opts.finished, finishedIds.value
                 )
                 v to g
             }
-            val visible = sortByPreference(rawVisible, emptyMap(), searchStrategy.value)
+            val visible = sortByPreference(rawVisible)
             _grayedIds.value = grayed
             stopTicker()
             _state.value = UiState.Success(visible)

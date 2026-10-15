@@ -4,22 +4,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.jmreader.data.local.Book
 import com.example.jmreader.data.local.Chapter
-import com.example.jmreader.data.local.Subscription
 import com.example.jmreader.data.repository.DownloadProgress
 import com.example.jmreader.data.repository.JmRepository
 import com.example.jmreader.ui.UiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import android.util.Log
 
 /** 详情页数据载体：书籍 + 章节列表，统一进 UiState。 */
 data class DetailContent(val book: Book, val chapters: List<Chapter>)
@@ -57,51 +51,6 @@ class DetailViewModel(private val repo: JmRepository) : ViewModel() {
     private val _favTags = MutableStateFlow<Set<String>>(emptySet())
     val favTags: StateFlow<Set<String>> = _favTags.asStateFlow()
 
-    /** 标签同义词分组（canonical → 别名），详情页标签区按组包几何图（v5.5.0）。 */
-    private val _aliasTagGroups = MutableStateFlow<Map<String, List<String>>>(emptyMap())
-    val aliasTagGroups: StateFlow<Map<String, List<String>>> = _aliasTagGroups.asStateFlow()
-
-    /** 已订阅作者名集合（详情页作者行订阅按钮状态，DB 实时观察）。 */
-    val subscribedAuthors: StateFlow<Set<String>> =
-        repo.observeSubscriptions()
-            .map { list -> list.map { it.author }.toSet() }
-            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), emptySet())
-
-    /** 当前详情作者的订阅状态（随 subscribedAuthors 实时更新）。 */
-    val isAuthorSubscribed: StateFlow<Boolean> = combine(
-        subscribedAuthors,
-        state
-    ) { subs, st ->
-        val author = (st as? UiState.Success)?.data?.book?.author?.trim() ?: ""
-        author.isNotEmpty() && author in subs
-    }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), false)
-
-    /** 切换订阅当前作者（作者为空或已订阅则取消，否则订阅）。 */
-    fun toggleAuthorSubscription() {
-        val author = (state.value as? UiState.Success)?.data?.book?.author?.trim() ?: return
-        if (author.isEmpty()) return
-        viewModelScope.launch {
-            runCatching {
-                val sub = repo.observeSubscriptions().first().firstOrNull { it.author == author }
-                if (sub != null) repo.removeSubscriptionAndUpdates(sub.id, author)
-                else repo.addSubscription(author)
-            }.onFailure { Log.e("DetailViewModel", "toggleAuthorSubscription failed", it) }
-        }
-    }
-
-    /** 进详情时把该作者的新作标记为已看（书架「订阅更新」角标联动）。 */
-    fun markUpdatesSeenIfAny() {
-        viewModelScope.launch {
-            runCatching {
-                val author = (state.value as? UiState.Success)?.data?.book?.author?.trim() ?: return@launch
-                if (author.isNotEmpty()) {
-                    val unseen = repo.observeUnseenUpdates().first().filter { it.author == author }
-                    if (unseen.isNotEmpty()) unseen.forEach { repo.markUpdateSeen(it.bookId) }
-                }
-            }
-        }
-    }
-
     /** 本 VM 已成功加载过的 albumId：从搜索/阅读页返回时直接复用，不再转圈重拉。 */
     private var loadedId: Int? = null
 
@@ -132,8 +81,6 @@ class DetailViewModel(private val repo: JmRepository) : ViewModel() {
                 _isLocal.value = local != null || b.savedDir.isNotBlank()
                 _isFavorite.value = b.favorite == 1
                 _favTags.value = (repo.getConfig("fav_tags") ?: "").split("|").map { it.trim() }.filter { it.isNotBlank() }.toSet()
-                _aliasTagGroups.value =
-                    runCatching { repo.observeAliasGroups("tag").first() }.getOrDefault(emptyMap())
                 loadedId = albumId
                 repo.bumpViewCount(albumId)   // 查看次数+1（阅读频率统计）
                 UiState.Success(DetailContent(b, ch))

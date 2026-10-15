@@ -9,35 +9,21 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import com.example.jmreader.ui.AppNavHost
 import com.example.jmreader.ui.JmViewModelFactory
 import com.example.jmreader.ui.LocalShowHints
 import com.example.jmreader.ui.ShowHintsState
-import com.example.jmreader.BuildConfig
 import com.example.jmreader.ui.theme.JMComicTheme
 import com.example.jmreader.ui.theme.ThemeState
 import com.example.jmreader.ui.theme.themeBackground
@@ -46,11 +32,6 @@ import com.example.jmreader.util.AppIconManager
 class MainActivity : ComponentActivity() {
     /** 通知点击起始路由（""=落地默认页，v6.1.0 起为书架；"library"=书架）。字段级状态，onNewIntent 可更新。 */
     private var navRoute by mutableStateOf("")
-
-    /** v1.13.0：通知权限一次性申请（Android 13+）——下载进度/结果通知需要。 */
-    private val notifPermissionLauncher = registerForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -72,16 +53,6 @@ class MainActivity : ComponentActivity() {
         }
         // 全局「显示提示说明」开关
         ShowHintsState.enabled = prefs.getBoolean("show_hints", true)
-
-        // v1.13.0：通知权限一次性申请（Android 13+）——下载进度/结果通知需要。
-        // v1.2.7 曾因「每次冷启动都弹 + 当时无通知实现」移除；现已实现下载通知，
-        // 仅第一次启动申请一次，拒绝后不再打扰（可到系统设置开启）。
-        if (android.os.Build.VERSION.SDK_INT >= 33 &&
-            prefs.getBoolean("notif_permission_asked", false).not()
-        ) {
-            prefs.edit().putBoolean("notif_permission_asked", true).apply()
-            notifPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-        }
 
         runCatching { AppIconManager.applyStoredIcon(this) }
 
@@ -125,67 +96,11 @@ class MainActivity : ComponentActivity() {
                             repo.setConfig("mig_v441_unfinished_first", "1")
                         }
                     }
-                    // v7.3.0：首启自检（版本升级后第一次进入时）——版本数据修正点 + 数据体检 + 故障识别，
-                    // 有修正/故障才弹窗报告；全新安装且无故障时静默（不打扰首启体验）。
-                    runCatching {
-                        val prev = repo.getConfig("data_audit_version")?.toIntOrNull() ?: 0
-                        if (prev != BuildConfig.VERSION_CODE) {
-                            val report = withContext(Dispatchers.IO) { repo.runStartupSelfCheck(prev) }
-                            repo.setConfig("data_audit_version", BuildConfig.VERSION_CODE.toString())
-                            val app = application as JmComicApplication
-                            if (report.faults.isNotEmpty() || (report.autoFixed.isNotEmpty() && report.versionFrom > 0)) {
-                                app.postStartupCheckReport(report)
-                            }
-                        }
-                    }
                 }
                 CompositionLocalProvider(LocalShowHints provides ShowHintsState.enabled) {
                     key(navRoute) {
                         AppNavHost(factory = factory, startRoute = navRoute)
                     }
-                }
-                // v7.3.0：首启自检报告弹窗（有修正/故障时显示一次）
-                val app = application as JmComicApplication
-                val report by app.startupCheckReport.collectAsState()
-                report?.let { r ->
-                    AlertDialog(
-                        onDismissRequest = { app.postStartupCheckReport(null) },
-                        title = { Text("启动自检报告") },
-                        text = {
-                            Column {
-                                Text(
-                                    "版本 ${r.versionFrom} → ${r.versionTo}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                if (r.autoFixed.isNotEmpty()) {
-                                    Spacer(Modifier.height(10.dp))
-                                    Text("已自动修复（${r.autoFixed.size}）", style = MaterialTheme.typography.titleSmall)
-                                    for (f in r.autoFixed) {
-                                        Text("· $f", style = MaterialTheme.typography.bodySmall)
-                                    }
-                                }
-                                if (r.faults.isNotEmpty()) {
-                                    Spacer(Modifier.height(10.dp))
-                                    Text(
-                                        "发现故障（${r.faults.size}）",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                    for (f in r.faults) {
-                                        Text(
-                                            "· $f",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.error
-                                        )
-                                    }
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(onClick = { app.postStartupCheckReport(null) }) { Text("知道了") }
-                        }
-                    )
                 }
             }
         }

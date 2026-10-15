@@ -44,7 +44,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
@@ -136,7 +135,6 @@ fun ReaderScreen(
     val book by vm.book.collectAsState()
     val isFavorite by vm.isFavorite.collectAsState()
     val downloading by vm.downloading.collectAsState()
-    val blocked by vm.blocked.collectAsState()
     val blackDeletedHandle by vm.blackDeletedHandle.collectAsState()
     val scope = rememberCoroutineScope()
     // 滑轨颜色（高度/进度由 ReaderProgressRail 内部自持，v1.2.0 起不再提到此处）
@@ -149,7 +147,6 @@ fun ReaderScreen(
     var jumpTo by remember { mutableStateOf<Int?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
-    var confirmBlacklist by remember { mutableStateOf(false) }
     // 下载完成后的询问：「下载完成，是否删除这本漫画的本地内容？」（v5.3.0）
     var askDeleteAfterDownload by remember { mutableStateOf(false) }
     // 翻章标记（4.2.2 修复）：goTo 会销毁当前阅读器页面（nav.navigate + popUpTo inclusive），
@@ -161,12 +158,11 @@ fun ReaderScreen(
     var immersive by remember { mutableStateOf(true) }
 
     LaunchedEffect(photoId) { vm.loadChapter(photoId, bookId, chapterId) }
-    // v5.11.0：拉黑/删除的漫画处理（设置 → 阅读 → 拉黑/删除的漫画）：
-    // auto_delete = 已拉黑或本地已删 → 删除并退出阅读器（本地已删则直接退出，无需再删）
-    LaunchedEffect(blocked, localDeleted, blackDeletedHandle) {
-        if (blackDeletedHandle == "auto_delete" && (blocked || localDeleted)) {
-            if (blocked) vm.deleteCurrent(bookId) { nav.popBackStack() }
-            else nav.popBackStack()
+    // v5.11.0：本地已删的漫画处理（设置 → 阅读 → 拉黑/删除的漫画 → auto_delete）：
+    // auto_delete = 本地已删 → 退出阅读器。v1.17.0 拉黑下线后只剩「本地已删」这一支。
+    LaunchedEffect(localDeleted, blackDeletedHandle) {
+        if (blackDeletedHandle == "auto_delete" && localDeleted) {
+            nav.popBackStack()
         }
     }
     // 标记条「知道了」关闭
@@ -274,11 +270,6 @@ fun ReaderScreen(
                                 text = { Text(if (overview) "回到阅读" else "缩略图览") },
                                 leadingIcon = { Icon(Icons.Filled.GridView, contentDescription = null) },
                                 onClick = { showMenu = false; overview = !overview }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("拉黑本漫画") },
-                                leadingIcon = { Icon(Icons.Filled.Block, contentDescription = null) },
-                                onClick = { showMenu = false; confirmBlacklist = true }
                             )
                             DropdownMenuItem(
                                 text = { Text(if (deleting) "删除中…" else "删除本书") },
@@ -606,9 +597,9 @@ fun ReaderScreen(
                         }
                     }
                 }
-                // ② 拉黑/删除标记（mark 模式）：已拉黑或本地已删 → 红条提示
+                // ② 本地已删标记（mark 模式）→ 红条提示
                 AnimatedVisibility(
-                    visible = blackDeletedHandle == "mark" && !markDismissed && (blocked || localDeleted),
+                    visible = blackDeletedHandle == "mark" && !markDismissed && localDeleted,
                     enter = fadeIn() + slideInVertically { -it },
                     exit = fadeOut() + slideOutVertically { -it }
                 ) {
@@ -623,7 +614,7 @@ fun ReaderScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Text(
-                                if (blocked) "该漫画已被拉黑" else "该漫画本地内容已删除",
+                                "该漫画本地内容已删除",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onErrorContainer
                             )
@@ -654,27 +645,6 @@ fun ReaderScreen(
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
             title = { Text("删除这本漫画？") },
             text = { Text("将从本机删除该漫画的全部已下载内容，并清除书架记录、章节与阅读进度。此操作不可恢复。") }
-        )
-    }
-
-    // 拉黑本漫画确认
-    if (confirmBlacklist) {
-        AlertDialog(
-            onDismissRequest = { confirmBlacklist = false },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmBlacklist = false
-                        vm.blacklistCurrent(bookId) {
-                            // 拉黑后该漫画不再参与喜欢/推荐，退出阅读器回上一页（书架/详情会自动刷新）
-                            nav.popBackStack()
-                        }
-                    }
-                ) { Text("拉黑") }
-            },
-            dismissButton = { TextButton(onClick = { confirmBlacklist = false }) { Text("取消") } },
-            title = { Text("拉黑这本漫画？") },
-            text = { Text("拉黑后该漫画将不再参与喜欢/推荐算法，并可在「设置 → 标签」与过滤页管理或解除。本地已下载内容不会被删除。") }
         )
     }
 

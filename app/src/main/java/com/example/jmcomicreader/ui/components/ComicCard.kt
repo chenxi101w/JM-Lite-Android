@@ -104,7 +104,6 @@ fun ComicGrid(
     selectedIds: Set<Int> = emptySet(),
     finishedIds: Set<Int> = emptySet(),
     grayedIds: Set<Int> = emptySet(),
-    trashedIds: Set<Int> = emptySet()
 ) {
     if (horizontal) {
         LazyRow(
@@ -128,7 +127,6 @@ fun ComicGrid(
                     isSelected = selectedIds.contains(book.id),
                     finished = finishedIds.contains(book.id),
                     grayed = grayedIds.contains(book.id),
-                    trashed = trashedIds.contains(book.id)
                 )
             }
             footer?.let { item { it() } }
@@ -166,7 +164,6 @@ fun ComicGrid(
                     isSelected = selectedIds.contains(book.id),
                     finished = finishedIds.contains(book.id),
                     grayed = grayedIds.contains(book.id),
-                    trashed = trashedIds.contains(book.id)
                 )
             }
             if (unfinished.isNotEmpty() && finished.isNotEmpty()) {
@@ -221,7 +218,6 @@ fun ComicGrid(
                     isSelected = selectedIds.contains(book.id),
                     finished = finishedIds.contains(book.id),
                     grayed = grayedIds.contains(book.id),
-                    trashed = trashedIds.contains(book.id)
                 )
             }
             footer?.let {
@@ -248,8 +244,6 @@ private data class CardTokens(
     val finishedFg: Color,
     val grayedBg: Color,
     val grayedFg: Color,
-    val trashBg: Color,
-    val trashFg: Color,
     val selectionOverlay: Color,
     val selectionCheck: Color,
     val actionFilled: Color,
@@ -274,8 +268,6 @@ private fun rememberCardTokens(): CardTokens {
             finishedFg = scheme.onTertiaryContainer,
             grayedBg = scheme.surfaceVariant,
             grayedFg = scheme.onSurfaceVariant,
-            trashBg = scheme.errorContainer,
-            trashFg = scheme.onErrorContainer,
             selectionOverlay = scheme.surface.copy(alpha = 0.82f),
             selectionCheck = scheme.primary,
             actionFilled = scheme.primaryContainer,
@@ -305,7 +297,6 @@ fun ComicCard(
     isSelected: Boolean = false,
     finished: Boolean = false,
     grayed: Boolean = false,
-    trashed: Boolean = false
 ) {
     val tk = rememberCardTokens()
     val shape: Shape = JmShape.comicCard
@@ -351,18 +342,7 @@ fun ComicCard(
                     overlayColor = if (grayed) tk.grayedBg.copy(alpha = 0.72f)
                     else tk.overlayRead
                 )
-                // ② 回收站角标（v7.1.0）：漫画在回收站中（本地已删、保留封面记录）
-                if (trashed) {
-                    BadgePill(
-                        text = "回收站",
-                        containerColor = tk.trashBg,
-                        contentColor = tk.trashFg,
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(6.dp)
-                    )
-                }
-                // ③ 已下载 → 右下角下载完成标记
+                // ② 已下载 → 右下角下载完成标记
                 if (grayed) {
                     BadgePill(
                         text = "已下载",
@@ -373,7 +353,7 @@ fun ComicCard(
                             .padding(6.dp)
                     )
                 }
-                // ④ 已看完 → 左下角 tertiary 标记
+                // ③ 已看完 → 左下角 tertiary 标记
                 if (finished) {
                     BadgePill(
                         text = "已看完",

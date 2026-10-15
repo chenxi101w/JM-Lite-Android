@@ -17,11 +17,8 @@ import coil.memory.MemoryCache
 import com.example.jmreader.data.local.AppDatabase
 import com.example.jmreader.data.repository.JmRepository
 import com.example.jmreader.data.api.JmApiHost
-import com.example.jmreader.data.repository.StartupCheckReport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -34,15 +31,6 @@ import java.io.File
 class JmComicApplication : Application() {
     lateinit var repository: JmRepository
         private set
-
-    /** 首启自检报告（v7.3.0）：版本升级后首启产生，MainActivity 观察并弹窗；空 = 无报告。 */
-    private val _startupCheckReport = MutableStateFlow<StartupCheckReport?>(null)
-    val startupCheckReport: StateFlow<StartupCheckReport?> = _startupCheckReport
-
-    /** 供 MainActivity 写入/清除自检报告。 */
-    fun postStartupCheckReport(report: StartupCheckReport?) {
-        _startupCheckReport.value = report
-    }
 
     // （companion object 仅在类末尾定义一次，见文末）
 
@@ -66,15 +54,6 @@ class JmComicApplication : Application() {
         val saveDir = getExternalFilesDir("DownloadedComics")?.absolutePath
             ?: File(filesDir, "DownloadedComics").absolutePath
         repository = JmRepository(db, cacheDir, saveDir)
-
-        // v1.13.0：下载保活 + 通知服务（常驻循环：有活跃下载自动转前台并发通知，无下载时空转）
-        startService(android.content.Intent(this, com.example.jmreader.data.download.DownloadService::class.java))
-
-        // v1.15.0：回收站宽限期到期扫描（启动一次；回收站页进入时也会扫）
-        CoroutineScope(Dispatchers.IO).launch {
-            runCatching { repository.checkRecycleExpiry() }
-                .onFailure { Log.w("JmApp", "checkRecycleExpiry failed", it) }
-        }
 
         // 调试期性能探针：主线程出现磁盘读/网络/慢调用时打栈到 logcat（tag StrictMode），
         // 用于真机定位卡顿根因；release 包不开启，零性能开销。

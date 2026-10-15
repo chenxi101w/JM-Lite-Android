@@ -5,11 +5,9 @@ import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
 import androidx.room.Insert
-import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.room.Update
 import androidx.room.Upsert
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -78,9 +76,6 @@ interface BookDao {
     @Query("UPDATE comics SET favorite = :v WHERE id = :id")
     suspend fun setFavorite(id: Int, v: Int)
 
-    @Query("UPDATE comics SET blocked = :v WHERE id = :id")
-    suspend fun setBlocked(id: Int, v: Int)
-
     /** 同步 push 源：账本全集 id（看过即账本）。 */
     @Query("SELECT id FROM comics")
     suspend fun getAllBookIds(): List<Int>
@@ -89,19 +84,15 @@ interface BookDao {
     @Query("SELECT id FROM comics WHERE viewCount > 0 OR lastReadAt > 0")
     suspend fun getReadBookIds(): List<Int>
 
-    /** 账本全量快照（作者拉黑批量同步 / 回收站到期扫描用）。 */
+    /** 账本全量快照（云同步 push 源用）。 */
     @Query("SELECT * FROM comics")
     suspend fun getAll(): List<Book>
-
-    /** 回收站列表流（宽限中或已删本地的行，原 comic_status.ext JSON 遍历改 SQL 直推）。 */
-    @Query("SELECT * FROM comics WHERE recycleAt > 0 OR trashed = 1")
-    fun observeTrashedRows(): Flow<List<Book>>
 
     /** 清空阅读画像①：删「不在本地且未收藏」的纯账本行（浏览痕迹）。 */
     @Query("DELETE FROM comics WHERE localDir = '' AND favorite = 0")
     suspend fun deleteLedgerOnlyRows()
 
-    /** 清空阅读画像②：在架/收藏行清阅读记忆（保留行与 finished/favorite/blocked 标记）。 */
+    /** 清空阅读画像②：在架/收藏行清阅读记忆（保留行与 finished/favorite 标记）。 */
     @Query(
         "UPDATE comics SET viewCount = 0, lastReadAt = 0, lastChapterId = 0, lastPageIndex = 0, " +
             "finished = 0 WHERE localDir <> '' OR favorite = 1"
@@ -169,7 +160,7 @@ interface DownloadDao {
     suspend fun clearAll()
 }
 
-// ─── 配置 / 过滤 / 分类 / 历史 DAO（对齐 PC 2.4.9）──────────────
+// ─── 配置 / 历史 DAO ─────────────────────────────────────────
 
 @Dao
 interface SystemConfigDao {
@@ -184,102 +175,6 @@ interface SystemConfigDao {
 
     @Upsert
     suspend fun set(config: SystemConfig)
-}
-
-@Dao
-interface BlockDao {
-    @Query("SELECT * FROM blocks ORDER BY id DESC")
-    fun observeAll(): Flow<List<Block>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(block: Block): Long
-
-    @Delete
-    suspend fun delete(block: Block)
-
-    @Query("DELETE FROM blocks WHERE id = :id")
-    suspend fun deleteById(id: Int)
-
-    @Query("SELECT * FROM blocks WHERE type = :type AND value = :value LIMIT 1")
-    suspend fun findByValue(type: String, value: String): Block?
-}
-
-@Dao
-interface BlacklistDao {
-    @Query("SELECT * FROM blacklists ORDER BY id DESC")
-    fun observeAll(): Flow<List<Blacklist>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(blacklist: Blacklist): Long
-
-    @Query("DELETE FROM blacklists WHERE id = :id")
-    suspend fun deleteById(id: Int)
-
-    @Query("SELECT * FROM blacklists WHERE type = :type AND value = :value LIMIT 1")
-    suspend fun findByValue(type: String, value: String): Blacklist?
-
-    @Query("SELECT * FROM blacklists WHERE id = :id")
-    suspend fun getById(id: Int): Blacklist?
-}
-
-@Dao
-interface AliasDao {
-    @Query("SELECT * FROM aliases WHERE type = :type ORDER BY canonical, `alias`")
-    fun observeAll(type: String): Flow<List<Alias>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(alias: Alias): Long
-
-    @Delete
-    suspend fun delete(alias: Alias)
-
-    @Query("DELETE FROM aliases WHERE id = :id")
-    suspend fun deleteById(id: Int)
-}
-
-@Dao
-interface CategoryDao {
-    @Query("SELECT * FROM categories ORDER BY sortOrder, id")
-    fun observeAll(): Flow<List<Category>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(category: Category): Long
-
-    @Update
-    suspend fun update(category: Category)
-
-    @Delete
-    suspend fun delete(category: Category)
-
-    @Query("DELETE FROM categories WHERE id = :id")
-    suspend fun deleteById(id: Int)
-
-    @Query("SELECT * FROM categories WHERE id = :id")
-    suspend fun get(id: Int): Category?
-}
-
-@Dao
-interface ComicCategoryDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(items: List<ComicCategory>)
-
-    @Query("DELETE FROM comic_categories WHERE comicJmId = :comicJmId")
-    suspend fun deleteForComic(comicJmId: Int)
-
-    @Query("DELETE FROM comic_categories WHERE categoryId = :categoryId")
-    suspend fun deleteForCategory(categoryId: Int)
-
-    @Query("SELECT categoryId FROM comic_categories WHERE comicJmId = :comicJmId")
-    suspend fun getForComic(comicJmId: Int): List<Int>
-
-    @Query("SELECT categoryId FROM comic_categories WHERE comicJmId = :comicJmId")
-    fun observeForComic(comicJmId: Int): Flow<List<Int>>
-
-    @Query("SELECT * FROM comic_categories")
-    fun observeAll(): Flow<List<ComicCategory>>
-
-    @Query("SELECT comicJmId FROM comic_categories WHERE categoryId = :categoryId")
-    suspend fun getComicsForCategory(categoryId: Int): List<Int>
 }
 
 @Dao
@@ -305,62 +200,12 @@ interface SearchHistoryDao {
     fun observeAggregated(limit: Int): Flow<List<SearchHistoryAgg>>
 }
 
-@Dao
-interface TagLibraryDao {
-    /** 搜索命中某标签：首次插入 count=1，已有则 count+1、刷新 lastSeenAt（每本漫画标签各+1）。 */
-    @Query(
-        "INSERT INTO tag_library(tag, count, lastSeenAt) VALUES(:tag, 1, :ts) " +
-            "ON CONFLICT(tag) DO UPDATE SET count = count + 1, lastSeenAt = :ts"
-    )
-    suspend fun bump(tag: String, ts: Long)
-
-    /** 标签库响应流派生（按数量降序，次级按最近命中）。 */
-    @Query("SELECT * FROM tag_library ORDER BY count DESC, lastSeenAt DESC")
-    fun observeAll(): Flow<List<TagLibrary>>
-
-    /** 标签库快照（按数量降序）。 */
-    @Query("SELECT * FROM tag_library ORDER BY count DESC, lastSeenAt DESC")
-    suspend fun getAll(): List<TagLibrary>
-
-    /** 清空标签库（设置页「清空标签库」）。 */
-    @Query("DELETE FROM tag_library")
-    suspend fun clearAll()
-}
-
-@Dao
-interface TagLibraryExpDao {
-    /** 实验库写入：首次插入 count=1，已有则 count+1、刷新 lastSeenAt。 */
-    @Query(
-        "INSERT INTO tag_library_exp(tag, count, lastSeenAt) VALUES(:tag, 1, :ts) " +
-            "ON CONFLICT(tag) DO UPDATE SET count = count + 1, lastSeenAt = :ts"
-    )
-    suspend fun bump(tag: String, ts: Long)
-
-    /** 实验库响应流（按数量降序）。 */
-    @Query("SELECT * FROM tag_library_exp ORDER BY count DESC, lastSeenAt DESC")
-    fun observeAll(): Flow<List<TagLibraryExp>>
-
-    /** 实验库快照。 */
-    @Query("SELECT * FROM tag_library_exp ORDER BY count DESC, lastSeenAt DESC")
-    suspend fun getAll(): List<TagLibraryExp>
-
-    /** 清空实验库（重建用）。 */
-    @Query("DELETE FROM tag_library_exp")
-    suspend fun clearAll()
-
-    /** 实验库标签总数（管理页展示）。 */
-    @Query("SELECT COUNT(*) FROM tag_library_exp")
-    suspend fun count(): Int
-}
-
 @Database(
     entities = [
         Book::class, Chapter::class, Download::class,
-        SystemConfig::class, Block::class, Alias::class, Blacklist::class,
-        Category::class, ComicCategory::class, SearchHistory::class,
-        TagLibrary::class, TagLibraryExp::class, Subscription::class, SubscriptionUpdate::class,
+        SystemConfig::class, SearchHistory::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -368,15 +213,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chapterDao(): ChapterDao
     abstract fun downloadDao(): DownloadDao
     abstract fun systemConfigDao(): SystemConfigDao
-    abstract fun blockDao(): BlockDao
-    abstract fun aliasDao(): AliasDao
-    abstract fun blacklistDao(): BlacklistDao
-    abstract fun categoryDao(): CategoryDao
-    abstract fun comicCategoryDao(): ComicCategoryDao
     abstract fun searchHistoryDao(): SearchHistoryDao
-    abstract fun tagLibraryDao(): TagLibraryDao
-    abstract fun tagLibraryExpDao(): TagLibraryExpDao
-    abstract fun subscriptionDao(): SubscriptionDao
 
     companion object {
         @Volatile
@@ -666,6 +503,65 @@ abstract class AppDatabase : RoomDatabase() {
         }
     }
 
+    /**
+     * v14 → v15：v1.17.0「轻量化」——删掉 7 个功能下线留下的表/列。
+     *
+     * 删表（直接 DROP，实体已从 @Database 移除，Room 不再校验它们）：
+     *   subscriptions / sub_updates   订阅
+     *   tag_library / tag_library_exp  标签库（exp 早已停用，纯死表）
+     *   blacklists                     拉黑（作品级/作者级）
+     *   blocks                         屏蔽（v7.0.7 起就已是死表）
+     *   categories / comic_categories  自定义分类（无 UI 入口）
+     *   aliases                        同义词/别名
+     *
+     * comics 删列：blocked / recycleAt / trashed。
+     * ⚠️ **不能用 ALTER TABLE DROP COLUMN** —— 它要 SQLite 3.35（2021-03），
+     * 而本 App minSdk=24（Android 7），Android 11 及以下自带 SQLite 3.28 直接报错。
+     * 因此走 SQLite 官方的「12 步改表法」：建新表 → 拷数据 → 删旧表 → 改名 → 重建索引。
+     * 新表 DDL **逐字照抄 Room 导出的 schema JSON**（v14 实体去掉三列后的形态），
+     * 手写必错：列类型/DEFAULT/PRIMARY KEY 任一处对不上，Room 启动校验就抛
+     * IllegalStateException，App 直接崩在启动页。
+     */
+    private val MIGRATION_14_15 = object : Migration(14, 15) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // ① 删表
+            listOf(
+                "subscriptions", "sub_updates", "tag_library", "tag_library_exp",
+                "blacklists", "blocks", "categories", "comic_categories", "aliases"
+            ).forEach { db.execSQL("DROP TABLE IF EXISTS `$it`") }
+
+            // ② comics 重建（去掉 blocked / recycleAt / trashed）
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `comics_v15` (" +
+                    "`id` INTEGER NOT NULL, " +
+                    "`title` TEXT NOT NULL, " +
+                    "`author` TEXT NOT NULL, " +
+                    "`coverUrl` TEXT NOT NULL, " +
+                    "`tags` TEXT NOT NULL DEFAULT '', " +
+                    "`description` TEXT NOT NULL, " +
+                    "`pageCount` INTEGER NOT NULL, " +
+                    "`localDir` TEXT NOT NULL DEFAULT '', " +
+                    "`addedAt` INTEGER NOT NULL, " +
+                    "`cached` INTEGER NOT NULL DEFAULT 0, " +
+                    "`finished` INTEGER NOT NULL DEFAULT 0, " +
+                    "`favorite` INTEGER NOT NULL DEFAULT 0, " +
+                    "`viewCount` INTEGER NOT NULL DEFAULT 0, " +
+                    "`lastReadAt` INTEGER NOT NULL DEFAULT 0, " +
+                    "`lastChapterId` INTEGER NOT NULL DEFAULT 0, " +
+                    "`lastPageIndex` INTEGER NOT NULL DEFAULT 0, " +
+                    "PRIMARY KEY(`id`))"
+            )
+            val cols = "`id`,`title`,`author`,`coverUrl`,`tags`,`description`,`pageCount`," +
+                "`localDir`,`addedAt`,`cached`,`finished`,`favorite`,`viewCount`," +
+                "`lastReadAt`,`lastChapterId`,`lastPageIndex`"
+            db.execSQL("INSERT INTO `comics_v15` ($cols) SELECT $cols FROM `comics`")
+            db.execSQL("DROP TABLE `comics`")
+            db.execSQL("ALTER TABLE `comics_v15` RENAME TO `comics`")
+            // DROP TABLE 会连带删掉索引，改名后必须重建（命中「已下载漫画」查询）
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_comics_localDir` ON `comics` (`localDir`)")
+        }
+    }
+
     fun build(context: Context): AppDatabase {
         return INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(
@@ -675,7 +571,7 @@ abstract class AppDatabase : RoomDatabase() {
             ).addMigrations(
                 MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
                 MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-                MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14
+                MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15
             )
                 // 发版铁律：禁用破坏性迁移。任何 schema 变更必须写对应 Migration，
                 // 缺失迁移时直接抛异常暴露问题，绝不静默清空用户数据。

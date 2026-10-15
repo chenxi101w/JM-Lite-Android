@@ -70,10 +70,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
     private val _localDeleted = MutableStateFlow(false)
     val localDeleted: StateFlow<Boolean> = _localDeleted.asStateFlow()
 
-    /** 当前漫画是否已被拉黑（作品级或作者级，v5.11.0「拉黑/删除处理」用）。 */
-    private val _blocked = MutableStateFlow(false)
-    val blocked: StateFlow<Boolean> = _blocked.asStateFlow()
-
     /** 拉黑/删除的漫画在阅读器里的处理方式（v5.11.0）：none=不处理 / mark=标记出来 / auto_delete=自动删除并退出。 */
     private val _blackDeletedHandle = MutableStateFlow("none")
     val blackDeletedHandle: StateFlow<String> = _blackDeletedHandle.asStateFlow()
@@ -147,8 +143,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
             // 整本看完判定只在最后一章生效：避免读中间章节滚到底就误标整本完成
             if (isLastChapter && ((reachedEnd && _autoFinishScroll.value) || reachedPercent)) {
                 repo.markFinished(bookId)
-                // v1.15.0：自动看完同样进回收站宽限期
-                runCatching { repo.markFinishedRecycle(bookId) }
             }
         }
     }
@@ -209,8 +203,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
                 val book = runCatching { repo.getBook(bookId) }.getOrNull()
                 _book.value = book
                 _isFavorite.value = book?.favorite == 1
-                // v5.11.0：拉黑状态（作品级/作者级）——供「拉黑/删除处理」判断标记或自动删除
-                _blocked.value = runCatching { repo.isBookBlocked(bookId) }.getOrDefault(false)
                 // v1.1.2：目录扫描是磁盘 IO，必须切到 IO 线程 ——
                 // 原实现在 viewModelScope（Main）里直接 File.isDirectory/listFiles/isFile，
                 // StrictMode 实测主线程阻塞约 31ms（11+10+10），即日志里那些 33ms 掉帧的来源。
@@ -237,8 +229,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
                     repo.saveProgress(bookId, chapterId, 0)
                 }
                 _isFinished.value = runCatching { repo.getBook(bookId)?.finished == 1 }.getOrDefault(false)
-                // v1.15.0：重开已看完的书 = 宽限期续期 7 天（全量版 v7.1.3 语义）
-                if (_isFinished.value) runCatching { repo.renewRecycle(bookId) }
             } catch (e: Exception) {
                 _state.value = UiState.Error(e.message ?: "加载章节失败")
             }
@@ -342,8 +332,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
     fun markFinished(bookId: Int) {
         viewModelScope.launch {
             repo.markFinished(bookId)
-            // v1.15.0：标看完即进回收站宽限期（7 天没再看删本地，重开续期）
-            runCatching { repo.markFinishedRecycle(bookId) }
             _isFinished.value = true
         }
     }
@@ -351,18 +339,6 @@ class ReaderViewModel(private val repo: JmRepository) : ViewModel() {
     /** 取消「已看完」。 */
     fun markUnfinished(bookId: Int) {
         viewModelScope.launch { repo.markUnfinished(bookId); _isFinished.value = false }
-    }
-
-    /**
-     * 拉黑当前漫画（作品级）：写入 blacklists 表并同步 comic_status 的 BIT_BLOCKED。
-     * 拉黑后该漫画不再参与喜欢/推荐算法，可在「设置 → 标签」与过滤页管理。
-     * 拉黑是即时操作，删完回调 onDone（UI 通常退出阅读器回上一页）。
-     */
-    fun blacklistCurrent(bookId: Int, onDone: () -> Unit) {
-        viewModelScope.launch {
-            runCatching { repo.addBlacklist("work", bookId.toString()) }
-            onDone()
-        }
     }
 
     /**

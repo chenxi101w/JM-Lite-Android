@@ -1,7 +1,6 @@
 ﻿package com.example.jmreader.ui.library
 
 import android.widget.Toast
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -76,18 +75,6 @@ fun LibraryScreen(nav: NavController, factory: JmViewModelFactory, vm: LibraryVi
                 .fillMaxSize()
                 .padding(12.dp)
         ) {
-    val trashCount by vm.trashCount.collectAsState()
-
-            // v1.15.0：回收站入口（看完 / 手动删除的漫画在此恢复或彻底删除）
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = { nav.navigate(Routes.RECYCLE) }) {
-                    Text(if (trashCount > 0) "回收站（$trashCount）" else "回收站")
-                }
-            }
             if (selectionMode) {
                 SelectionToolbar(
                     selectedCount = selectedIds.size,
@@ -118,9 +105,7 @@ fun LibraryScreen(nav: NavController, factory: JmViewModelFactory, vm: LibraryVi
                 )
             } else {
                 val finishedIds = remember(books) { books.filter { it.finished == 1 }.map { it.id }.toSet() }
-                val trashedIds = remember(books) { books.filter { it.trashed == 1 }.map { it.id }.toSet() }
                 ComicGrid(
-                    trashedIds = trashedIds,
                     books = books,
                     onBookClick = { book ->
                         if (selectionMode) {
@@ -162,9 +147,9 @@ fun LibraryScreen(nav: NavController, factory: JmViewModelFactory, vm: LibraryVi
             text = {
                 Text(
                     if (b.savedDir.isNotBlank())
-                        "将删除已下载的本地文件（漫画进回收站，7 天内可在回收站恢复或彻底删除）。"
+                        "将删除已下载的本地文件，以及下载记录与阅读进度。**此操作不可恢复**。"
                     else
-                        "将从书架移除这本漫画（可在回收站恢复）。"
+                        "将从书架移除这本漫画，并清除其阅读进度记录。**此操作不可恢复**。"
                 )
             },
             confirmButton = {

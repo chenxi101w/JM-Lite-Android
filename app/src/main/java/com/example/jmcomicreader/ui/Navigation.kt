@@ -18,7 +18,6 @@ import com.example.jmreader.ui.detail.DetailScreen
 import com.example.jmreader.ui.discover.DiscoverScreen
 import com.example.jmreader.ui.downloads.DownloadsScreen
 import com.example.jmreader.ui.library.LibraryScreen
-import com.example.jmreader.ui.recycle.RecycleScreen
 import com.example.jmreader.ui.library.LibraryViewModel
 import com.example.jmreader.ui.reader.ReaderScreen
 import com.example.jmreader.ui.search.SearchViewModel
@@ -31,7 +30,6 @@ object Routes {
     const val SEARCH = "search"
     const val SETTINGS = "settings"
     const val DOWNLOADS = "downloads"
-    const val RECYCLE = "recycle"
     const val SEARCH_ARGS = "search?q={q}&mode={mode}"
     const val DETAIL = "detail/{albumId}?local={local}"
     const val READER = "reader/{bookId}/{photoId}/{chapterId}"
@@ -118,10 +116,6 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
         }
         composable(Routes.DOWNLOADS) {
             DownloadsScreen(nav = nav, factory = factory)
-        }
-        // v1.15.0：回收站（看完/手动删除进回收站可恢复）
-        composable(Routes.RECYCLE) {
-            RecycleScreen(nav = nav, factory = factory)
         }
         composable(
             Routes.DETAIL,

@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.jmreader"
         minSdk = 24
         targetSdk = 34
-        versionCode = 77
-        versionName = "1.16.0"
+        versionCode = 79
+        versionName = "1.17.0"
 
         // v1.4.0：仅 arm64-v8a（真机为 arm64）。Chaquopy 移除后不再有"多架构重复装 Python 包"的开销。
         ndk {
@@ -119,9 +119,6 @@ dependencies {
 
     // 协程
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-
-    // 后台任务（订阅更新周期检查：WorkManager 系统调度，App 被杀也能被拉起执行）
-    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

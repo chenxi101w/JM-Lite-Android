@@ -11,12 +11,16 @@ import com.example.jmreader.data.local.Download
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlin.coroutines.coroutineContext
 // v2.0：`kotlinx.coroutines.sync.Semaphore` 已随 Semaphore 排队方案一起移除 ——
 // 它的许可泄漏缺陷（acquire 后、try 前被取消 → finally 不存在）是「排队永远不动」的根因，
 // 历史教训完整保留在本类头部的注释里。
@@ -48,8 +52,12 @@ class DownloadManager(
     private val saveDir: String,
     private val configProvider: suspend (String) -> String?,
     private val onDetailInvalidated: (Int) -> Unit,
-    private val restoreFromRecycle: suspend (Int) -> Unit = {},
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO)
+    // v1.16.1：根 Job 必须用 SupervisorJob。原来是裸 `CoroutineScope(Dispatchers.IO)`
+    // —— 任一子协程的未捕获异常会**连带取消整个 scope**：watchdog、启动恢复、
+    // 之后所有 dispatch 的 launch 全部变成「已取消态，body 不执行」，
+    // 而 enqueue 还在照常往 pending/active 里放死任务 → 新点的下载全部静默卡住，
+    // 只有重启（新进程新 scope）或……重下也不行。单本书翻车不得拖垮整个调度器。
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) {
     private val downloadDao = db.downloadDao()
     private val bookDao = db.bookDao()
@@ -113,7 +121,6 @@ class DownloadManager(
 
     /** v1.1.1：下载完成时把章节列表落库（此前只写 books，导致本地无章节 → 离线读不了）。 */
     private val chapterDao = db.chapterDao()
-    private val tagLibraryDao = db.tagLibraryDao()
 
     // ════════════════════════════════════════════════════════════════
     // v2.0 下载队列：显式 FIFO + 单调度器（**取代 v14 的 Semaphore 方案**）
@@ -244,22 +251,32 @@ class DownloadManager(
      *              false = 一般入队：已在下载/已排队则忽略（去重）。
      */
     private fun enqueue(albumId: Int, force: Boolean = false) {
-        if (active.containsKey(albumId)) {
-            if (!force) {
-                Log.i(TAG, "入队跳过：$albumId 正在下载中")
-                return
+        // v1.16.1：队列变更整体纳入 dispatchLock —— 与 runDownload.finally 的
+        // 「摘 entry + dispatch」互斥。否则强制重下的 `active.remove → pending.add`
+        // 会和旧任务的迟到 finally 交错，dispatch 的 `active.containsKey → continue`
+        // 把已 poll 的同一本书**直接丢弃** → 书落入「QUEUED 记录但不在任何队列」的
+        // limbo（界面永远显示「排队中（队列第 N 位）」）。
+        synchronized(dispatchLock) {
+            if (active.containsKey(albumId)) {
+                if (!force) {
+                    Log.i(TAG, "入队跳过：$albumId 正在下载中")
+                    return
+                }
+                // 强制重下：取消当前任务。runDownload 的 finally 会腾位并重新 dispatch。
+                // 这里只是把 Job 从 active 摘掉并 cancel，队列位置由下面重新排。
+                active.remove(albumId)?.cancel()
+                Log.i(TAG, "强制重下：$albumId 取消当前任务，重新入队")
             }
-            // 强制重下：取消当前任务。runDownload 的 finally 会腾位并重新 dispatch。
-            // 这里只是把 Job 从 active 摘掉并 cancel，队列位置由下面重新排。
-            active.remove(albumId)?.cancel()
-            Log.i(TAG, "强制重下：$albumId 取消当前任务，重新入队")
+            if (pending.contains(albumId)) {
+                if (!force) return
+                pending.remove(albumId)     // 强制时挪到队尾重新排
+            }
+            pending.add(albumId)
         }
-        if (pending.contains(albumId)) {
-            if (!force) return
-            pending.remove(albumId)     // 强制时挪到队尾重新排
-        }
-        pending.add(albumId)
-        // 入队即写 QUEUED 记录（v1.2.4 行为保持：下载管理里立刻可见，而不是毫无痕迹）
+        // 入队即写 QUEUED 记录（v1.2.4 行为保持：下载管理里立刻可见，而不是毫无痕迹）。
+        // ⚠️ v1.16.1：dispatch() 必须等这条落库之后 —— 原来是两条路各跑各的，
+        // 迟到的 QUEUED 写会把已经 DOWNLOADING、甚至已 DONE 的记录覆盖回「排队中」
+        // （幽灵排队：界面显示排队中，实际在下或已下完）。放进同一个 launch 里保序。
         scope.launch {
             runCatching {
                 val cur = downloadDao.get(albumId)
@@ -273,8 +290,8 @@ class DownloadManager(
                     )
                 }
             }
+            dispatch()
         }
-        dispatch()
     }
 
     /**
@@ -288,7 +305,12 @@ class DownloadManager(
         synchronized(dispatchLock) {
             while (active.size < bookConcurrency) {
                 val id = pending.poll() ?: break
-                if (active.containsKey(id)) continue
+                if (active.containsKey(id)) {
+                    // v1.16.1：入队/摘除都已在同一把锁内，此状态理论不可达。
+                    // 真出现了至少留个现场，别静默丢任务。
+                    Log.w(TAG, "调度异常：$id 同时在 active 与 pending，跳过本轮")
+                    continue
+                }
                 val job = scope.launch { runDownload(id) }
                 active[id] = job
                 Log.i(
@@ -314,11 +336,32 @@ class DownloadManager(
         autoRetry.remove(albumId)
         clearStalled(albumId)
         autoRetrying.remove(albumId)
+        // v1.16.1：本协程自己的 Job —— finally 摘 active 时做身份校验。
+        // cancelDownload / 强制重下是「先摘 entry 再 cancel」，旧任务的迟到 finally
+        // 若无条件 remove，会把同书**新任务**的 entry 一起摘掉 → 新任务脱离监控 →
+        // watchdog 之后取消它全是空转 → 同书重复并发下载不断累积。
+        val self = coroutineContext[Job]!!
         try {
             downloadAlbumInternal(albumId)
+        } catch (e: CancellationException) {
+            throw e                      // 取消是正常路径，照旧抛出让协程收尾
+        } catch (e: Throwable) {
+            // v1.16.1：异常必须在这里收官。downloadAlbumInternal 会显式 throw e，
+            // 一路逃出本协程就会连带取消整个 scope（见 scope 处注释）。
+            // 在这里落 FAILED、腾位，调度器与其它书不受影响。
+            Log.e(TAG, "下载任务异常收官：$albumId", e)
+            runCatching {
+                downloadDao.upsert(
+                    Download(bookId = albumId, status = "FAILED", createdAt = System.currentTimeMillis())
+                )
+            }
         } finally {
-            active.remove(albumId)
-            dispatch()
+            // 摘 entry + 腾位 dispatch 在同一把锁内完成 —— 与 enqueue 的队列变更
+            // 互斥，否则 dispatch 可能 poll 到「刚取消又入队」的同一本书并丢弃它。
+            synchronized(dispatchLock) {
+                active.remove(albumId, self)
+                dispatch()
+            }
         }
     }
 
@@ -402,14 +445,6 @@ class DownloadManager(
         val author = metaBook.author.ifBlank { existing?.author ?: "" }
         val cover = metaBook.coverUrl.ifBlank { existing?.coverUrl ?: "" }
         val tags = metaBook.tags.ifBlank { existing?.tags ?: "" }
-            // 下载完成：真实标签写入标签库（修复「搜索后标签库空」的兜底来源之一——
-            // 搜索结果不带 tags，但下载响应带专辑真实标签，落库即补入）
-            if (tags.isNotBlank()) {
-                val ts = System.currentTimeMillis()
-                for (t in tags.split("|").map { it.trim().lowercase() }.filter { it.isNotEmpty() }) {
-                    try { tagLibraryDao.bump(t, ts) } catch (_: Exception) {}
-                }
-            }
             if (existing != null) {
                 // v6.0.3：下载完成时更新 addedAt = 完成时间，书架「下载时间」排序 = 下载完成顺序（最新在前）
                 bookDao.upsert(
@@ -457,7 +492,6 @@ class DownloadManager(
             }
             else Log.w("DownloadManager", "章节落库跳过：无任何章节目录（$albumId）")
             onDetailInvalidated(albumId)   // 详情内存缓存里的 savedDir 已过期（否则详情页仍显示「未下载」）
-            runCatching { restoreFromRecycle(albumId) }   // v7.1.0：重新下载完成 = 从回收站拾回（清 trash 标记）
             // 下载完成后按设置处理下载记录：none 不处理 / hide 隐藏 / delete 删除记录（保留本地与书架）
             applyDownloadAfter(albumId)
     }
@@ -478,7 +512,6 @@ class DownloadManager(
             // v6.0.3：纠正路径同样刷新 addedAt，保证「下载时间」排序一致
             runCatching { bookDao.get(albumId)?.let { bookDao.upsert(it.copy(savedDir = savedDir, addedAt = System.currentTimeMillis())) } }
             onDetailInvalidated(albumId)
-            runCatching { restoreFromRecycle(albumId) }   // v7.1.0：纠正为完成后同样拾回
             // 纠正为完成后同样应用「下载后行为」
             applyDownloadAfter(albumId)
         }
@@ -596,7 +629,7 @@ class DownloadManager(
 
     // ── 卡死检测 + 自动续传重下（v6.0.8） ─────────────────────────
     // 原理：每下完一张图会更新 .jm_progress/{albumId}.json（mtime），
-    // 长时间无更新 = 下载卡死（网络挂起 / 任务死）。watchdog 每 30s 扫描一次
+    // 长时间无更新 = 下载卡死（网络挂起 / 任务死）。watchdog 每 5s 扫描一次
     // 所有 DOWNLOADING 的下载：卡死则取消（保留已下载内容）并自动重下，
     // 重下时会跳过已存在图片 → 断点续传只补缺失，不浪费流量。
     //
@@ -643,7 +676,7 @@ class DownloadManager(
     }
 
     /**
-     * 停滞阈值（v1.6.9 定为 10s，**v1.8.4 放宽到 30s**）。
+     * 停滞阈值（v1.6.9 定为 10s → v1.8.4 放宽到 30s → **现值 60s**，v1.16.1 校对注释）。
      *
      * 为什么必须放宽：10 秒是按「8.8 张/秒、单张 100KB」估的，但那只在**下载已经
      * 跑起来**之后成立。真实流程里每本开始前都要先把所有章节的图片清单拉回来
@@ -654,14 +687,15 @@ class DownloadManager(
      *
      * v1.8.4 已把章节清单改成并发拉取（见 `NativeAlbumDownloader.fetchChapterPlans`），
      * 预热成本降到 1~2 秒；但弱网 / 章节特别多时仍可能超过 10 秒，
-     * 因此阈值一并放宽到 30 秒（仍远快于 30 秒的 readTimeout，真卡死照样能兜住）。
+     * 因此阈值一并放宽到 30 秒；v1.8.6 又加了 mtime 活动信号后最终定为 **60 秒**
+     * （仍远快于图片取图最坏 5 域名 × 23s 的回退链，真卡死照样能兜住）。
      */
     private val STALL_RESET_MS = 60_000L
 
-    /** watchdog 扫描间隔（v1.6.9：30s → 5s，配合 10 秒停滞判据及时发现）。 */
+    /** watchdog 扫描间隔（v1.6.9：30s → 5s，配合 60 秒停滞判据及时发现）。 */
     private val WATCHDOG_INTERVAL_MS = 5_000L
 
-    /** 启动卡死检测 watchdog（App 启动即扫描，每 30s 一次）。 */
+    /** 启动卡死检测 watchdog（App 启动即扫描，每 5s 一次）。 */
     fun startStuckWatchdog() {
         scope.launch {
             while (true) {
@@ -728,7 +762,12 @@ class DownloadManager(
         // 这段保留作为**跨版本升级的兜底**。
         // 判据：QUEUED 记录 + 不在 pending/active 队列里 + 无任何在下载任务
         // —— 否则正常排队（前面还有书在下）会被误判。
-        val anyActive = all.any { it.status == "DOWNLOADING" }
+        // v1.16.1：anyActive 必须要求「记录确实在队列里」。陈旧 DOWNLOADING 记录
+        // （杀进程残留 / 幽灵写入）会让 anyActive 永远为 true，把下面 limbo QUEUED
+        // 书的救援**永久**挡住 —— 用户看到「排队中」永远不动，只有重启或重下能好。
+        val anyActive = all.any {
+            it.status == "DOWNLOADING" && (active.containsKey(it.bookId) || pending.contains(it.bookId))
+        }
         if (!anyActive) {
             for (dl in all) {
                 if (dl.status != "QUEUED") continue
@@ -761,18 +800,18 @@ class DownloadManager(
                 continue
             }
 
-            // ── v1.6.9 改判据：**10秒内下载字节数没增长 → 立即续下**──────
+            // ── v1.6.9 改判据：**60 秒内下载字节数没增长 → 自动续下**────────
             // 旧判据只看 `mtime`（每张图后写一次），阈值 5 分钟 ——
             //   结果：某张图卡住时界面显示「下载中 · 0 B/s」，用户既看不到
             //   也没法操作，只能干等 5 分钟（实测用户反馈"下不了"）。
             //
-            // 新判据更直接：**比字节数**。
+            // 新判据更直接：**比字节数**（阈值沿 STALL_RESET_MS = 60s）。
             //   · `stalled[bookId]` 记下"上次看到的字节数 + 那时的时刻"；
-            //   · 每轮扫描若`now - 记录时刻 >= 10s` 且**字节数与上次完全相同**
+            //   · 每轮扫描若`now - 记录时刻 >= 60s` 且**字节数与上次完全相同**
             //     → 判定为「真的没在动」→ 立即取消并断点续下；
             //   · 字节数变了 → 说明在推进，把记录刷新。
-            // 10 秒足够判定"卡死"：真机上正常速度是 8.8 张/秒，
-            // 单张图（~100KB）1 秒内就完成，绝不会 10 秒毫无进展。
+            // 60 秒足够判定"卡死"：真机上正常速度是 8.8 张/秒，
+            // 单张图（~100KB）1 秒内就完成，绝不会 60 秒毫无进展。
             // ── v1.8.6：活动信号从「只看字节数」改为「字节数 or 进度文件 mtime」──
             // 为什么必须加 mtime：**章节清单拉取阶段根本不产生图片字节**，
             // 「几十秒零字节增长」是这一阶段的**正常状态**。
@@ -795,7 +834,7 @@ class DownloadManager(
             }
             val stuckSince = stalledSince[dl.bookId] ?: now
             if (now - stuckSince < STALL_RESET_MS) continue      // 还在观察期内
-            // 字节数 10 秒内零增长 = 真卡死
+            // 字节数（含 mtime 活动信号）60 秒内零变化 = 真卡死
             Log.w("DownloadManager", "下载停滞 ${now - stuckSince}ms（${dl.bookId}, bytes=${p.bytes}），自动续下")
 
             if (autoRetrying.contains(dl.bookId)) continue      // 已在自动续传中，跳过
