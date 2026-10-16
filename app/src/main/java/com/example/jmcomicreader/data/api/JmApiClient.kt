@@ -62,7 +62,12 @@ internal object JmApiClient {
      *
      * @return 命中结果（可能为空列表）；**接口不可用时返回 null**，调用方据此回退 Python 链路。
      */
-    suspend fun search(keyword: String, page: Int = 1, order: String = "mr"): List<Book>? {
+    suspend fun search(
+        keyword: String,
+        page: Int = 1,
+        order: String = "mr",
+        time: String = "a",
+    ): List<Book>? {
         if (keyword.isBlank()) return null
         val params = LinkedHashMap<String, String>()
         params["search_query"] = keyword
@@ -72,6 +77,8 @@ internal object JmApiClient {
         // 这里只在非默认值时带上，并由 BookLibrary 做「拿不到结果就回落 mr」的兜底 ——
         // 即使接口不认这个枚举，用户也只会看到默认排序，而不是空列表。
         if (order != "mr") params["order"] = order
+        // v1.28.1：月/周排名 = order=mv + time=m/w（参考 CategoryGroups.kt 注释）
+        if (time != "a") params["time"] = time
         val json = request(
             path = "search",
             params = params

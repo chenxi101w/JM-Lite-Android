@@ -50,7 +50,9 @@ class BookLibrary(
      * md 总排名 / mv_m 月排名 / mv_w 周排名 —— 后三个取值**待真机验证**，
      * 验证方式是搜一次看日志：若出现「order=xx 无结果，回落 mr 重试」即说明接口不认。
      */
-    private val SUPPORTED_ORDERS = setOf("mr", "mv", "mp", "tr", "md", "mv_m", "mv_w")
+    private val SUPPORTED_ORDERS = setOf("mr", "tf", "mv", "mp", "tr")
+    /** v1.28.1：time 白名单（a 全部 / w 周 / m 月）。与 mv 组合成周/月排名。 */
+    private val SUPPORTED_TIMES = setOf("a", "w", "m")
 
     /**
      * 搜索漫画。
@@ -72,21 +74,21 @@ class BookLibrary(
         // 只支持「纯关键词」这一档：时间 time 与标签 tagsJson 的接口参数枚举未逐一验证。
         // v1.28.0：**放开 orderBy**。首页新增排序按钮（最新/最多喜欢/总排名/月排名/周排名），
         // 不再只放行 mr；取值合法性交给下面的「回落」兜底，而不是在这里一刀切拒掉。
-        if (mode != "keyword" || tagsJson.isNotBlank() || time != "a" || orderBy !in SUPPORTED_ORDERS) {
+        if (mode != "keyword" || tagsJson.isNotBlank() || time !in SUPPORTED_TIMES || orderBy !in SUPPORTED_ORDERS) {
             Log.w(
                 "BookLibrary",
                 "搜索条件暂不支持（mode=$mode orderBy=$orderBy time=$time 有标签=${tagsJson.isNotBlank()}）"
             )
             return emptyList()
         }
-        val books = JmApiClient.search(keyword, page, orderBy)
+        val books = JmApiClient.search(keyword, page, orderBy, time)
         if (books.isNullOrEmpty()) {
             // v1.28.0：非默认排序**回落**。order 的取值没有在真机逐个验证过，
             // 若接口不认这个枚举 → 返回空 → 用 mr 再试一次。
             // 这样最坏情况只是"排序没生效"，绝不会变成"搜不出东西"。
             if (orderBy != "mr") {
                 Log.w("BookLibrary", "order=$orderBy 无结果，回落 mr 重试：$keyword")
-                val fallback = JmApiClient.search(keyword, page, "mr")
+                val fallback = JmApiClient.search(keyword, page, "mr", "a")
                 if (!fallback.isNullOrEmpty()) return fallback
             }
             Log.w("BookLibrary", "原生搜索无结果：$keyword")

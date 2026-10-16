@@ -188,9 +188,15 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                                 listOf("scroll" to "随搜索栏收放", "stay" to "常驻显示"),
                                 cfg["category_bar_behavior"] ?: "scroll") { vm.set("category_bar_behavior", it) }
                             Divider()
-                            ChipRow("结果列数",
-                                listOf("0" to "自适应", "2" to "2 列", "3" to "3 列", "4" to "4 列"),
-                                cfg["search_columns"] ?: "0") { vm.set("search_columns", it) }
+                            // v1.28.1：网格密度（默认 2 列，学参考实现的精选流观感）
+                            ChipRow("网格密度",
+                                listOf("2" to "2 列", "3" to "3 列", "4" to "4 列"),
+                                cfg["search_columns"] ?: "2") { vm.set("search_columns", it) }
+                            Divider()
+                            // v1.28.1：卡片风格（干净优先 / 大图流）
+                            ChipRow("卡片样式",
+                                listOf("clean" to "干净优先", "immersive" to "大图流"),
+                                cfg["card_style"] ?: "clean") { vm.set("card_style", it) }
                             Divider()
                             SwitchRow("屏蔽已下载", "搜索结果里隐藏已下载的",
                                 (cfg["hide_downloaded_in_search"] ?: "hide") != "off") {

@@ -91,6 +91,8 @@ fun SearchBody(
     // v1.28.0：首页改版新增
     val categoryBarMode by vm.categoryBarMode.collectAsState()
     val orderBy by vm.orderBy.collectAsState()
+    val time by vm.time.collectAsState()
+    val cardStyle by vm.cardStyle.collectAsState()
     val sortOptionsExpanded by vm.sortOptionsExpanded.collectAsState()
 
     // v1.1.8：搜索后收起输入法。
@@ -174,14 +176,20 @@ fun SearchBody(
     // ⚠️ 分类行里 LazyRow 必须显式给 height —— 在 Row 中即使给了 weight(1f)，
     //    不给高度也会被量满并可能盖住兄弟节点吃掉点击（v1.27.0 搜索框 bug 同源）。
     val catInCollapsible = categoryBarMode != "stay"
+    // v1.28.1：排序枚举按参考实现 `CategoryGroups.kt` 的注释修正。
+    // 关键认知：**月/周排名不是独立的 order 值**，而是 `order=mv` + `time=m/w`。
+    //   mr=最新 / tf=最多爱心（界面叫"最多喜欢"） / mv=总排名
+    //   v1.28.0 我猜的 md / mv_m / mv_w **全是无效值**。
     val sortOpts = listOf(
-        "mr" to "最新",
-        "mv" to "最多喜欢",
-        "md" to "总排名",
-        "mv_m" to "月排名",
-        "mv_w" to "周排名",
+        SortOpt("mr", "a", "最新"),
+        SortOpt("tf", "a", "最多喜欢"),
+        SortOpt("mv", "a", "总排名"),
+        SortOpt("mv", "m", "月排名"),
+        SortOpt("mv", "w", "周排名"),
     )
-    val sortLabel = sortOpts.firstOrNull { it.first == orderBy }?.second ?: "最新"
+    val curSort = sortOpts.firstOrNull { it.order == orderBy && it.time == time }
+        ?: sortOpts.first()
+    val sortLabel = curSort.label
 
     val SEARCH_ROW = 46f
     val CAT_ROW = 42f
@@ -229,6 +237,19 @@ fun SearchBody(
         scope.launch { gridState.requestScrollToItem(0) }
     }
 
+    // 选排序：写入 order + time，然后重新搜（已搜过且有词才重搜）
+    val applySort: (SortOpt) -> Unit = { opt ->
+        vm.setSortOptionsExpanded(false)
+        if (opt.order != orderBy || opt.time != time) {
+            vm.setOrderBy(opt.order)
+            vm.setTime(opt.time)
+            if (searched && keyword.isNotBlank()) {
+                vm.onSearch()
+                scope.launch { gridState.requestScrollToItem(0) }
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .padding(padding)
@@ -266,17 +287,8 @@ fun SearchBody(
                     if (sortOptionsExpanded) {
                         SortPanel(
                             options = sortOpts,
-                            current = orderBy,
-                            onPick = { v ->
-                                vm.setSortOptionsExpanded(false)
-                                if (orderBy != v) {
-                                    vm.setOrderBy(v)
-                                    if (searched && keyword.isNotBlank()) {
-                                        vm.onSearch()
-                                        scope.launch { gridState.requestScrollToItem(0) }
-                                    }
-                                }
-                            },
+                            current = curSort,
+                            onPick = { applySort(it) },
                         )
                     }
                 }
@@ -299,17 +311,8 @@ fun SearchBody(
             if (sortOptionsExpanded) {
                 SortPanel(
                     options = sortOpts,
-                    current = orderBy,
-                    onPick = { v ->
-                        vm.setSortOptionsExpanded(false)
-                        if (orderBy != v) {
-                            vm.setOrderBy(v)
-                            if (searched && keyword.isNotBlank()) {
-                                vm.onSearch()
-                                scope.launch { gridState.requestScrollToItem(0) }
-                            }
-                        }
-                    },
+                    current = curSort,
+                    onPick = { applySort(it) },
                 )
             }
         }
@@ -363,6 +366,7 @@ fun SearchBody(
                 modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 12.dp),
                 state = gridState,
                 columns = gridColumns,
+                cardStyle = cardStyle,
                 onDownload = { vm.download(it) },
                 downloadingIds = downloadingIds,
                 downloadedIds = downloadedIds,
@@ -560,9 +564,9 @@ private fun SortButton(label: String, open: Boolean, onClick: () -> Unit) {
 /** 向下展开的排序面板（横向可滚，避免小屏挤爆）。 */
 @Composable
 private fun SortPanel(
-    options: List<Pair<String, String>>,
-    current: String,
-    onPick: (String) -> Unit,
+    options: List<SortOpt>,
+    current: SortOpt,
+    onPick: (SortOpt) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyRow(
@@ -575,8 +579,11 @@ private fun SortPanel(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(end = 16.dp),
     ) {
         items(options.size) { i ->
-            val (value, label) = options[i]
-            IosChip(label, selected = current == value) { onPick(value) }
+            val opt = options[i]
+            IosChip(opt.label, selected = current == opt) { onPick(opt) }
         }
     }
 }
+
+/** 排序项：界面名称 + 接口 order/time。月/周排名靠 time 区分（order 都是 mv）。 */
+private data class SortOpt(val order: String, val time: String, val label: String)

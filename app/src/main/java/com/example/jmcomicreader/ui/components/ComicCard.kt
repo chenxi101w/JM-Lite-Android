@@ -6,6 +6,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -59,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
@@ -97,6 +100,8 @@ fun ComicGrid(
     onDownload: ((Book) -> Unit)? = null,
     downloadingIds: Set<Int> = emptySet(),
     downloadedIds: Set<Int> = emptySet(),
+    /** v1.28.1：卡片风格（设置项 card_style），透传给每张卡。clean / immersive */
+    cardStyle: String = "clean",
     onDelete: ((Book) -> Unit)? = null,
     onFavorite: ((Book) -> Unit)? = null,
     favoriteIds: Set<Int> = emptySet(),
@@ -109,12 +114,14 @@ fun ComicGrid(
         LazyRow(
             modifier = modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+            // v1.28.1：外边距 4dp → 20dp（照参考），封面更大、呼吸感更强
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
         ) {
             items(books, key = { it.id }, contentType = { "book" }) { book ->
                 ComicCard(
                     book = book,
                     onClick = { onBookClick(book) },
+                    cardStyle = cardStyle,
                     onLongClick = onBookLongClick?.let { cb -> { cb(book) } },
                     modifier = Modifier.width(124.dp),
                     onDownload = onDownload,
@@ -142,8 +149,10 @@ fun ComicGrid(
             // 108dp + 12dp 间距在常见的 360dp 屏（去掉页面左右 12dp 内边距后可用约 336dp）上
             // 算出来 floor(348 / 120) = 2 列 —— 卡片过宽、一屏信息量太少，用户明确要 3 列。
             // 仍保留 columns > 0 时按设置固定，只有「自适应」这一档被钉成 3 列。
+            // v1.28.1：默认列数 3 → **2**（学参考实现的「精选流」观感，用户确认默认 2 列）。
+            // 密度可在「设置 → 搜索 → 网格密度」切 2/3/4。
             columns = if (columns > 0) GridCells.Fixed(columns)
-            else GridCells.Fixed(3),
+            else GridCells.Fixed(2),
             modifier = modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -297,152 +306,214 @@ fun ComicCard(
     isSelected: Boolean = false,
     finished: Boolean = false,
     grayed: Boolean = false,
+    /**
+     * v1.28.1：卡片风格（设置项 card_style）。
+     *  - `clean`     **干净优先**（默认，照参考实现）：没有卡片容器/边框/阴影，
+     *                封面 + 两行标题 + 一行作者，直接铺在页面底上。
+     *  - `immersive` **大图流**：封面底部加渐变遮罩，标题压在封面上，封面下只留一行作者。
+     */
+    cardStyle: String = "clean",
 ) {
     val tk = rememberCardTokens()
-    val shape: Shape = JmShape.comicCard
+    val immersive = cardStyle == "immersive"
+    val coverRadius = if (immersive) 16.dp else 12.dp
 
-    // 选中态 = 主色描边 + 主色容器背景
-    val cardContainer = if (isSelected) tk.selectedBg
-    else MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
-    val cardBorder = if (isSelected) tk.selectedBorder else tk.defaultBorder
-
-    Card(
+    Column(
         modifier = modifier
             // 灰显（hideMode=gray 已下载隐藏模式）整卡淡化，保留可读性
             .alpha(if (grayed) 0.6f else 1f)
-            .then(if (cardBorder != null) Modifier.border(cardBorder, shape) else Modifier)
-            .clip(shape)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            ),
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = cardContainer),
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = 1.dp,
-            pressedElevation = 3.dp
-        )
+            .clip(RoundedCornerShape(12.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
-        Column {
-            // ── 封面区（主体） ──
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.75f)
-            ) {
-                RemoteDecodedImage(
-                    imgUrl = book.coverUrl,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                    contentDescription = book.title
-                )
-                // ① 已看完 / 已下载灰显 → 半透明蒙层 + 底部渐隐
-                CoverOverlay(
-                    show = finished || grayed,
-                    overlayColor = if (grayed) tk.grayedBg.copy(alpha = 0.72f)
-                    else tk.overlayRead
-                )
-                // ② 已下载 → 右下角下载完成标记
-                if (grayed) {
-                    BadgePill(
-                        text = "已下载",
-                        containerColor = tk.grayedBg,
-                        contentColor = tk.grayedFg,
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(6.dp)
-                    )
-                }
-                // ③ 已看完 → 左下角 tertiary 标记
-                if (finished) {
-                    BadgePill(
-                        text = "已看完",
-                        containerColor = tk.finishedBg,
-                        contentColor = tk.finishedFg,
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(6.dp)
-                    )
-                }
-                // ⑤ 多选态：左上角勾选圆钮
-                if (selectionMode) {
-                    Surface(
-                        shape = CircleShape,
-                        color = tk.selectionOverlay,
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(8.dp)
-                            .size(26.dp)
-                            .then(
-                                if (isSelected) Modifier.border(
-                                    1.5.dp,
-                                    tk.selectionCheck,
-                                    CircleShape
-                                ) else Modifier
+        // ── 封面区 ──
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.75f)
+                .clip(RoundedCornerShape(coverRadius))
+        ) {
+            RemoteDecodedImage(
+                imgUrl = book.coverUrl,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                contentDescription = book.title
+            )
+            // 已看完 / 已下载灰显 → 半透明蒙层
+            CoverOverlay(
+                show = finished || grayed,
+                overlayColor = if (grayed) tk.grayedBg.copy(alpha = 0.72f) else tk.overlayRead
+            )
+            // 大图流：底部渐变遮罩，保证压在封面上的标题可读
+            if (immersive) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            Brush.verticalGradient(
+                                0.5f to Color.Transparent,
+                                1f to Color.Black.copy(alpha = 0.78f)
                             )
+                        )
+                )
+            }
+            // ── 封面角上的透明方形小按钮（v1.28.1 用户要求）──
+            // 「收藏和下载放漫画左上右上，透明正方形同时小一点」：
+            // 收藏 → 左上；下载 → 右上。**无底色、无描边**，只有图标本身；
+            // 触摸区 28dp（比原来的 tonal 按钮小一圈），图标 17dp，方形圆角 6dp。
+            // 多选态下让位给勾选圆钮，避免同角叠两层。
+            if (!selectionMode && onFavorite != null) {
+                CornerIconButton(
+                    icon = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = if (isFavorite) "取消收藏" else "收藏",
+                    active = isFavorite,
+                    align = Alignment.TopStart,
+                ) { onFavorite(book) }
+            }
+            if (!selectionMode && (onDownload != null || (isDownloaded && onDelete != null))) {
+                CornerIconButton(
+                    icon = if (isDownloaded) Icons.Filled.Download else Icons.Outlined.Download,
+                    contentDescription = if (isDownloaded) "删除下载" else "下载",
+                    active = isDownloaded,
+                    align = Alignment.TopEnd,
+                    enabled = !isDownloading,
+                ) {
+                    if (isDownloaded) onDelete?.invoke(book) else onDownload?.invoke(book)
+                }
+            }
+            // 多选态：左上角勾选圆钮
+            if (selectionMode) {
+                Surface(
+                    shape = CircleShape,
+                    color = tk.selectionOverlay,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp)
+                        .size(26.dp)
+                        .then(
+                            if (isSelected) Modifier.border(
+                                1.5.dp,
+                                tk.selectionCheck,
+                                CircleShape
+                            ) else Modifier
+                        )
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                        AnimatedVisibility(
+                            visible = isSelected,
+                            enter = fadeIn() + scaleIn(),
+                            exit = fadeOut() + scaleOut()
                         ) {
-                            AnimatedVisibility(
-                                visible = isSelected,
-                                enter = fadeIn() + scaleIn(),
-                                exit = fadeOut() + scaleOut()
-                            ) {
-                                Icon(
-                                    Icons.Filled.Check,
-                                    contentDescription = "已选中",
-                                    tint = tk.selectionCheck,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(5.dp)
-                                )
-                            }
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = "已选中",
+                                tint = tk.selectionCheck,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(5.dp)
+                            )
                         }
                     }
                 }
             }
-            // ── 操作条：左下载 + 右收藏（IconButton + tonal/填充色） ──
-            ComicActionBar(
-                isDownloading = isDownloading,
-                isDownloaded = isDownloaded,
-                onDownload = onDownload?.let { cb -> { cb(book) } },
-                onDelete = onDelete?.let { cb -> { cb(book) } },
-                isFavorite = isFavorite,
-                onFavorite = onFavorite?.let { cb -> { cb(book) } },
-                selectionMode = selectionMode
-            )
-            // ── 标题与作者 ──
-            Column(
-                modifier = Modifier.padding(
-                    start = 8.dp,
-                    end = 8.dp,
-                    bottom = 8.dp,
-                    top = 2.dp
-                ),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
+            // 状态标记：收敛成右下角一个小圆点（原来是一整条胶囊角标，太吵）
+            if (finished || isDownloaded) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .size(6.dp)
+                        .background(
+                            if (isDownloaded) tk.grayedFg else tk.finishedFg,
+                            CircleShape
+                        )
+                )
+            }
+            // 大图流：标题压封面底部
+            if (immersive) {
+                Text(
+                    text = book.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color.White,
+                    maxLines = 2,
+                    minLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 8.dp, end = 8.dp, bottom = 16.dp)
+                )
+            }
+        }
+        // ── 文字区 ──
+        Column(
+            modifier = Modifier.padding(
+                start = if (immersive) 2.dp else 2.dp,
+                end = 2.dp,
+                top = 6.dp,
+                bottom = 6.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            if (!immersive) {
                 Text(
                     text = book.title,
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface,
+                    // minLines = 2：保证同一行卡片等高，网格不会参差
                     maxLines = 2,
-                    minLines = 1,
+                    minLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (book.author.isNotBlank()) {
-                    Text(
-                        text = book.author,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+            }
+            if (book.author.isNotBlank()) {
+                Text(
+                    text = book.author,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
+    }
+}
+
+/**
+ * 封面角上的**透明方形小按钮**。
+ *
+ * 用户要求：「收藏和下载放漫画左上右上，**透明正方形**同时**小一点**」。
+ * 所以这里**不画任何底色/描边**，只有图标本身；触摸区 28dp（方形、圆角 6dp），
+ * 图标 17dp —— 比原来那排 tonal `IconButton`（40dp 触摸区 + 圆形填充）小一圈。
+ *
+ * 状态色：未激活 = 白（在封面图上可读），激活 = 主题色（已收藏/已下载一眼能看出）。
+ */
+@Composable
+private fun BoxScope.CornerIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    active: Boolean,
+    align: Alignment,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .align(align)
+            .padding(4.dp)
+            .size(28.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(17.dp),
+            tint = if (active) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.92f)
+        )
     }
 }
 

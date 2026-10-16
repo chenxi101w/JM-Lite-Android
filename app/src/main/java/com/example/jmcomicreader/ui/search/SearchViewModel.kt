@@ -54,6 +54,14 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
      *  - stay：**常驻显示**（跟漫画列表一样一直在，不参与收放）
      * 用户原话：「分类栏分两种设置可改，第一种是随搜索栏一起收拉，一种是跟漫画一样常驻」。
      */
+    /**
+     * v1.28.1：卡片风格（设置项 card_style）。
+     *  - clean    干净优先（默认，照参考）：无卡片容器，封面 + 标题 + 作者
+     *  - immersive 大图流：封面底部渐变遮罩 + 标题压封面
+     */
+    private val _cardStyle = MutableStateFlow("clean")
+    val cardStyle: StateFlow<String> = _cardStyle.asStateFlow()
+
     private val _categoryBarMode = MutableStateFlow("scroll")
     val categoryBarMode: StateFlow<String> = _categoryBarMode.asStateFlow()
     fun setCategoryBarMode(v: String) { _categoryBarMode.value = v }
@@ -275,6 +283,8 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
             _searchBarBehavior.value = repo.getConfig("search_bar_behavior") ?: "stay"
             // v1.28.0：分类栏模式（scroll 随搜索栏收放 / stay 常驻）
             _categoryBarMode.value = repo.getConfig("category_bar_behavior") ?: "scroll"
+            // v1.28.1：卡片风格
+            _cardStyle.value = repo.getConfig("card_style") ?: "clean"
             _hideMode.value = repo.getConfig("hide_downloaded_in_search") ?: "hide"
             _hideFinishedMode.value = repo.getConfig("hide_finished_in_search") ?: "hide"
         }
