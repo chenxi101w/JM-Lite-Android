@@ -4,12 +4,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CollectionsBookmark
-import androidx.compose.material.icons.filled.TravelExplore
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.outlined.CollectionsBookmark
-import androidx.compose.material.icons.outlined.TravelExplore
-import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.filled.Bookmarks
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Bookmarks
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -64,13 +64,12 @@ object Routes {
 }
 
 /**
- * 轻量版底部导航（v1.0.0）：书架 / 搜索 / 设置。
+ * 轻量版底部导航：书架 / 搜索 / 设置。
  *
- * v1.6.3：每个 Tab 配**专属主题色**（选中时图标与文字用该色），
- * 换掉原来千篇一律的 `Book/Search/Settings`：
- *  - 书架 `CollectionsBookmark`（书夹，比 `Book` 更像"收藏的书"）— 琥珀色
- *  - 搜索 `TravelExplore`（放大镜带把，比 `Search` 更活跃）— 青色
- *  - 设置 `Tune`（调节滑块，比 `Settings` 齿轮更"可调"）— 紫色
+ * v1.27.0（照抄参考实现 `jm-comic-android` 的 CompactBottomBar 逐项对齐）：
+ *  - 图标换成**市面最常见**的三个：`Bookmarks` / `Search` / `Settings`；
+ *  - 配色从 v1.6.3 的「三色跳脱」（琥珀/青/紫）改为**相邻色相渐变**（橙/青蓝/紫），
+ *    远看仍分得清、近看是一套；图标用 `Brush` 走渐变，文字取渐变深色端。
  */
 enum class TopLevelRoute(
     val route: String,
@@ -80,12 +79,26 @@ enum class TopLevelRoute(
     /** 未选中态图标（线性）—— v1.22.1 起按参考实现的做法：选中/未选中换图标字形，
      *  这样「当前在哪一栏」不靠指示器动画也能一眼看出。 */
     val iconIdle: ImageVector,
-    /** 选中态图标/文字色（未选中统一用 onSurfaceVariant）。 */
-    val tint: Color,
+    /** 选中态图标/文字的渐变起止色（未选中统一用 onSurfaceVariant 灰）。
+     *  v1.27.0：用户嫌原来三色（琥珀/青/紫）太跳，统一成**相邻色相**的三组渐变，
+     *  视觉上是一套而不是三个色。 */
+    val gradient: List<Color>,
 ) {
-    LIBRARY(Routes.LIBRARY, "书架", Icons.Filled.CollectionsBookmark, Icons.Outlined.CollectionsBookmark, Color(0xFFF59E0B)),
-    DISCOVER(Routes.SEARCH, "搜索", Icons.Filled.TravelExplore, Icons.Outlined.TravelExplore, Color(0xFF06B6D4)),
-    SETTINGS(Routes.SETTINGS, "设置", Icons.Filled.Tune, Icons.Outlined.Tune, Color(0xFF7C6BF0)),
+    LIBRARY(
+        Routes.LIBRARY, "书架",
+        Icons.Filled.Bookmarks, Icons.Outlined.Bookmarks,
+        listOf(Color(0xFFFF8A4C), Color(0xFFFFB877)),
+    ),
+    DISCOVER(
+        Routes.SEARCH, "搜索",
+        Icons.Filled.Search, Icons.Outlined.Search,
+        listOf(Color(0xFF22C1E0), Color(0xFF5EE7F5)),
+    ),
+    SETTINGS(
+        Routes.SETTINGS, "设置",
+        Icons.Filled.Settings, Icons.Outlined.Settings,
+        listOf(Color(0xFF7C6BF0), Color(0xFFA99BFF)),
+    ),
 }
 
 /**

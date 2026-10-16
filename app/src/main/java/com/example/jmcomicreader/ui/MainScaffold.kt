@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -40,6 +41,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.mutableIntStateOf
@@ -58,11 +60,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.clipToBounds
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavController
 import kotlin.math.roundToInt
@@ -101,6 +108,19 @@ fun MainScaffold(
     fab: @Composable () -> Unit = {},
     content: @Composable (padding: androidx.compose.foundation.layout.PaddingValues) -> Unit
 ) {
+    // v1.27.0：底栏收放只挂在**书架 / 搜索**两个内容页（设置页与详情页常驻）
+    val barCollapsible = currentRoute == Routes.LIBRARY || currentRoute == Routes.SEARCH
+    // 底栏展开度（1=全展开，0=全收起）。声明在 Scaffold 之外，
+    // 因为 bottomBar 与 content 两个槽位都要读它。
+    val tabExpand = remember { Animatable(1f) }
+    val tabDir = remember { mutableIntStateOf(0) }
+    val outerScope = rememberCoroutineScope()
+    // 「刚进去时是拉起的」：切页（含 Tab 切换）一律复位成展开
+    LaunchedEffect(currentRoute) {
+        tabExpand.snapTo(1f)
+        tabDir.intValue = 0
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -144,25 +164,40 @@ fun MainScaffold(
                 }
             }
         },
-        bottomBar = { CompactTabBar(currentRoute, nav) },
+        bottomBar = {
+            CompactTabBar(
+                currentRoute, nav,
+                expand = if (barCollapsible) tabExpand.value else 1f,
+            )
+        },
         floatingActionButton = fab
     ) { padding ->
         // ── v1.23.0：悬浮球随内容滚动收拉 ──────────────────────────────
         // 下滑时缩到 0（完全收起，点不到），上滑立刻复原。
         // 用 nestedScroll 在**这一层**统一观察，不动每个页面的列表代码。
+        // v1.27.0：同一个连接器顺带驱动**底栏**收放（书架/搜索页），方向一致：
+        // 内容下滑 → 悬浮球与底栏一起收起；上滑 → 一起复原。
         val fabScale = remember { Animatable(1f) }
         val scrollDir = remember { mutableIntStateOf(0) }
         val scope = rememberCoroutineScope()
-        val scrollConn = remember {
+        val scrollConn = remember(barCollapsible) {
             object : NestedScrollConnection {
                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                     val dy = consumed.y
                     if (dy > 6f && scrollDir.intValue != 1) {
                         scrollDir.intValue = 1
                         scope.launch { fabScale.animateTo(0f, tween(180)) }
+                        if (barCollapsible && tabDir.intValue != 1) {
+                            tabDir.intValue = 1
+                            outerScope.launch { tabExpand.animateTo(0f, tween(200)) }
+                        }
                     } else if (dy < -6f && scrollDir.intValue != -1) {
                         scrollDir.intValue = -1
                         scope.launch { fabScale.animateTo(1f, tween(180)) }
+                        if (barCollapsible && tabDir.intValue != -1) {
+                            tabDir.intValue = -1
+                            outerScope.launch { tabExpand.animateTo(1f, tween(200)) }
+                        }
                     }
                     return Offset.Zero
                 }
@@ -303,71 +338,125 @@ fun topLevelRouteOf(route: String?): String {
 }
 
 /**
- * 极简底部导航栏（v1.22.1 起抽出，v1.23.0 详情页也用它）。
+ * 极简底部导航栏（v1.22.1 抽出；v1.27.0 按参考实现重做外观 + 加上滑收放）。
  *
- * 抽成独立组件的原因：**底部栏本来是「每个顶级页面各自调 MainScaffold」才有**，
- * 于是详情页/阅读器这类自己画全屏 Scaffold 的页面完全没有底栏 ——
- * 从详情页进到搜索等深层页面后，用户没法直接切回书架，只能按返回键（实测体验很差）。
- * 现在详情页也挂上这条栏，切 Tab 一步到位。
+ * ── 为什么要照抄参考实现 ──────────────────────────────────────────
+ * 用户原话：「三个导航键丑的不行，你学习一下人家行吗」。
+ * 翻 `jm-comic-android` 的 `CompactBottomBar` 逐项对齐，得到下面这套尺寸：
+ *   · 内容区高 **52dp**（M3 NavigationBar 默认 80dp，砍掉一大半指示器留白）
+ *   · 图标 **22dp**、文字 **12sp**（字比图标小一档，正是用户要的「字比图标稍小」）
+ *   · 选中/未选中**换字形**（Filled ↔ Outlined），不靠指示器动画
+ *   · `indication = null` —— 零涟漪，零动画
+ *   · 点击区 `weight(1f) + fillMaxHeight`，整条栏三等分，无空隙
  *
- * 零动画：整条栏没有指示器动画、没有涟漪（`indication = null`），
- * 选中态靠 tint + 字重 + 实心/线性图标三者表达。
+ * 与参考实现的差别只有两处，都是用户明确要求的：
+ *   1. 图标用 `Brush` 渐变着色（参考是单一 primary 色；用户说「可以用彩色但要好看，
+ *      比如渐变」）。渐变通过 `colorFilter = ColorFilter.tint(brush)` 打在矢量上，
+ *      **不需要**为每个 Tab 准备彩色图源。
+ *   2. 参考实现的 `Label` 用 primary；我们按 Tab 取 `TopLevelRoute.gradient` 的深色端。
+ *
+ * ── 收放 ───────────────────────────────────────────────────────
+ * 需求：「刚进去时是拉起的，向下滑动漫画展示时收起来，上滑自动拉起」。
+ * 用**真实高度动画**而不是 `graphicsLayer` 平移 —— 平移会在收起后留下一块
+ * 空白高度、且点得到（与悬浮球同一个坑）。这里同样不跟手，只认方向、阈值 6px。
  */
 @Composable
-fun CompactTabBar(currentRoute: String, nav: NavController) {
+fun CompactTabBar(
+    currentRoute: String,
+    nav: NavController,
+    /** v1.27.0：1=完全展开，0=完全收起。外部（MainScaffold 的 nestedScroll）驱动。 */
+    expand: Float = 1f,
+) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 8.dp,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .windowInsetsPadding(WindowInsets.navigationBars),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            for (r in TopLevelRoute.values()) {
-                val selected = currentRoute == r.route
-                Box(
+        Column(Modifier.fillMaxWidth()) {
+            // 高度动画容器：clipToBounds 保证收起时里面的图标/文字被裁掉而不是溢出
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(with(density) { (52f * expand).toDp() })
+                    .clipToBounds()
+            ) {
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) {
-                            if (currentRoute != r.route) {
-                                // popUpTo 到**起始目的地**（书架）：用根图 id 会在当前页是
-                                // 普通目的地时把整张返回栈清掉 → 点了没反应（v1.7.5 的教训）
-                                nav.navigate(r.route) {
-                                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (selected) r.icon else r.iconIdle,
-                            contentDescription = r.label,
-                            tint = if (selected) r.tint else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp),
-                        )
-                        Text(
-                            text = r.label,
-                            color = if (selected) r.tint else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        )
+                    for (r in TopLevelRoute.values()) {
+                        val selected = currentRoute == r.route
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    if (!selected) {
+                                        // popUpTo 到**起始目的地**（书架）：用根图 id 会在当前页是
+                                        // 普通目的地时把整张返回栈清掉 → 点了没反应（v1.7.5 的教训）
+                                        nav.navigate(r.route) {
+                                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            // 竖排：图标在上、文字在下 —— 这是用户嫌「字比图标小」
+                            // 时真正的诉求来源（横排时两者基线不齐，字显得更小更歪）。
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                // 选中态用 `tint = Transparent` 把图标画成「空模」，
+                                // 再用 drawWithContent + SrcIn 把渐变**灌进图标形状**里。
+                                // （material3 的 Icon 只接受 Color 型 tint，
+                                //   要上渐变只能走后处理这一条路 —— 不新增任何图片资源。）
+                                // 未选中直接给灰 tint。
+                                if (selected) {
+                                    Icon(
+                                        imageVector = r.icon,
+                                        contentDescription = r.label,
+                                        tint = Color.Transparent,
+                                        modifier = Modifier
+                                            .size(22.dp)
+                                            .drawWithContent {
+                                                drawContent()
+                                                drawRect(
+                                                    brush = Brush.horizontalGradient(r.gradient),
+                                                    blendMode = BlendMode.SrcIn,
+                                                )
+                                            },
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = r.iconIdle,
+                                        contentDescription = r.label,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                }
+                                Text(
+                                    text = r.label,
+                                    fontSize = 11.sp,
+                                    lineHeight = 13.sp,
+                                    color = if (selected) r.gradient.first() else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                )
+                            }
+                        }
                     }
                 }
             }
+            // 系统导航栏安全区：始终保留，收起时也不让内容顶到小白条下面
+            Spacer(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
         }
     }
 }

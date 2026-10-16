@@ -145,8 +145,14 @@ fun SearchBody(
     // 用**真实高度动画**（外层 Box 裁切）而不是 graphicsLayer 平移 —— 平移会在收起后
     // 留下一块空白高度，看起来像「上面少了一块」。网格是 weight(1f)，
     // 搜索栏收起时它自动填满，视觉上就是内容长大一格。
-    // 收起盒子里装的是「搜索框 + 分类 chip 行」，高度随分类数量变
-    val barDp = if (homeCategories.isEmpty()) 52f else 98f
+    // 收起盒子里装的是「搜索框 + 分类 chip 行」
+    //
+    // ⚠️ v1.27.0 修 bug「搜索框点不了」：原来这里用的是 **Box**（层叠布局）。
+    // Box 的子元素默认都摆到 TopStart，而 LazyRow 没有高度约束 ——
+    // 在 98dp 高的 Box 里它会被量成 98dp、并且**画在 OutlinedTextField 之上**，
+    // 于是一整条 32dp 的 chip 行横跨搜索框，点击全被它吃掉（真机反馈）。
+    // 现在改成 **Column**（顺序排布、不重叠）+ chip 行显式高度，搜索框恢复可点。
+    val barDp = if (homeCategories.isEmpty()) 52f else 90f
     val barHeight = remember { Animatable(barDp) }
     val barDir = remember { mutableIntStateOf(0) }
     // 无结果时强制常驻（没东西可滚，藏起来等于把搜索入口也弄没了）
@@ -188,6 +194,7 @@ fun SearchBody(
                 .height(with(LocalDensity.current) { barHeight.value.toDp() })
                 .clipToBounds()
         ) {
+            Column(Modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = keyword,
             onValueChange = { vm.setKeyword(it) },
@@ -232,9 +239,14 @@ fun SearchBody(
         )
 
         // ── 分类快捷入口：分类就是关键词，点一下直接用该词搜索 ──
+        // ⚠️ 显式高度 32dp：不给高度的话 LazyRow 在剩余空间里会被量高，
+        //    视觉上 chip 行会离搜索框过远（v1.26.0 的观感问题）。
         if (homeCategories.isNotEmpty()) {
             LazyRow(
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .padding(top = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 2.dp),
             ) {
@@ -255,6 +267,7 @@ fun SearchBody(
                 }
             }
         }
+            }   // ← Column 结束
         }   // ← 顶部收放区（搜索框 + 分类）高度动画 Box 结束
 
         // 未搜索过：显示引导空态（而不是转圈）
