@@ -115,12 +115,12 @@ fun MainScaffold(
         tabHide.snapTo(0f)
         tabDir.intValue = 0
     }
-    // 底栏占位总高 = 胶囊 56dp + 底边距（10dp + 系统导航栏安全区）。
+    // 底栏占位总高 = 胶囊 56dp + 底边距（实测 15dp，系统导航栏更大时取系统值）。
     // 内容按这个值留底部空间，否则最后一张卡片会被胶囊压住。
     val tabBarHeight = 56.dp
     val sysInsetsOuter = WindowInsets.systemBars.asPaddingValues()
-    val tabBarTotal = tabBarHeight +
-        sysInsetsOuter.calculateBottomPadding() + 10.dp
+    val navBarsOuter = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val tabBarTotal = tabBarHeight + maxOf(15.dp, navBarsOuter)
     val densityOuter = androidx.compose.ui.platform.LocalDensity.current
     val tabBarTotalPx = with(densityOuter) { tabBarTotal.roundToPx() }
 
@@ -373,9 +373,10 @@ fun topLevelRouteOf(route: String?): String {
  *
  * | 项 | 录屏像素 | 换算 |
  * |---|---|---|
- * | 胶囊高 | 90 | **56dp** |
- * | 左/右边距 | 23.5 | **15dp** |
- * | 距屏幕底 | 23 | **约 14dp**（浮在手势条上方） |
+ * | 胶囊高 | 89（y 1168..1256） | **56dp** |
+ * | 左/右边距 | 21 | **13dp** |
+ * | 距屏幕底 | 24 | **15dp**（浮在手势条上方） |
+ * | 圆角半径 | 24 | **15dp**（圆角矩形，不是全圆角胶囊） |
  * | 图标 ink | 26×23 / 29×29 | **约 22~24dp** |
  * | 文字单字 | 15~17 | **约 11sp** |
  * | 图标↔文字间距 | 15 | **约 5dp** |
@@ -405,12 +406,20 @@ fun CompactTabBar(
 ) {
     val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Surface(
+        // 逐像素实测（视频 576×1280 ↔ 真机 1080×2400，1 视频px = 0.625dp）：
+        //   胶囊 y 1168..1256 = 89px = **56dp**；左右边缘 x 21/557 = 边距 **13dp**；
+        //   其上边缘的圆角轮廓：顶部 dx=24px→ 半径约 **15dp**（**不是**胶囊形/全圆角）。
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 15.dp, end = 15.dp, bottom = navBarBottom + 10.dp),
+            .padding(
+                start = 13.dp,
+                end = 13.dp,
+                // 胶囊底边距屏幕底 24px = 15dp；系统导航栏更大时（三键导航）用系统值
+                bottom = maxOf(15.dp, navBarBottom),
+            ),
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(28.dp),
-        shadowElevation = 10.dp,
+        shape = RoundedCornerShape(15.dp),
+        shadowElevation = 8.dp,
     ) {
         Row(
             modifier = Modifier
