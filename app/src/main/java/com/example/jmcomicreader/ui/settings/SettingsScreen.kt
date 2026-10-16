@@ -188,22 +188,21 @@ private fun AppHeader(context: Context) {
         AppIconManager.ICON_DOUBAO2 -> R.drawable.ic_launcher_doubao2_preview
         AppIconManager.ICON_DOUBAO3 -> R.drawable.ic_launcher_doubao3_preview
         AppIconManager.ICON_DOUBAO4 -> R.drawable.ic_launcher_doubao4_preview
-        else -> R.drawable.ic_launcher_preview
+        // v1.27.3：默认图标改用**白角已抠成透明**的版本（ic_launcher_preview_cutout.png）。
+        // 原来这张是「粉色圆角方框浮在白底上」，四个角带白边，看起来像贴了张白纸。
+        else -> R.drawable.ic_launcher_preview_cutout
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-        Card(
-            shape = RoundedCornerShape(26.dp),
-            colors = CardDefaults.cardColors(
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            )
-        ) {
-            Image(
-                painter = painterResource(iconRes),
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(76.dp).padding(8.dp)
-            )
-        }
+        // v1.27.3：**去掉那层浅灰 Card 底**。
+        // 用户反馈「我看到了一个浅浅的灰框」——那是 Card 的 surfaceVariant(45%)，
+        // 和图标自带的粉色外框叠在一起变成「两层框」，很累赘。
+        // 现在图标直接落在页面背景上，不再包一层。
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.size(76.dp)
+        )
         Spacer(Modifier.height(10.dp))
         Text(context.getString(R.string.app_name), style = MaterialTheme.typography.titleLarge)
         Text(
