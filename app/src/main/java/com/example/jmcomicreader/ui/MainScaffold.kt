@@ -5,12 +5,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -60,11 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
@@ -119,11 +115,12 @@ fun MainScaffold(
         tabHide.snapTo(0f)
         tabDir.intValue = 0
     }
-    // 底栏总高 = 52dp 内容区 + 系统导航栏安全区（内容要按这个值留底部空间，
-    // 否则收起后内容会被底栏挡住最后一截）
-    val tabBarHeight = 52.dp
+    // 底栏占位总高 = 胶囊 56dp + 底边距（10dp + 系统导航栏安全区）。
+    // 内容按这个值留底部空间，否则最后一张卡片会被胶囊压住。
+    val tabBarHeight = 56.dp
     val sysInsetsOuter = WindowInsets.systemBars.asPaddingValues()
-    val tabBarTotal = tabBarHeight + sysInsetsOuter.calculateBottomPadding()
+    val tabBarTotal = tabBarHeight +
+        sysInsetsOuter.calculateBottomPadding() + 10.dp
     val densityOuter = androidx.compose.ui.platform.LocalDensity.current
     val tabBarTotalPx = with(densityOuter) { tabBarTotal.roundToPx() }
 
@@ -368,32 +365,37 @@ fun topLevelRouteOf(route: String?): String {
 }
 
 /**
- * 底部导航栏（v1.22.1 抽出；v1.27.0 外观重做；v1.27.1 收放方式重做）。
+ * 底部导航栏（v1.22.1 抽出；v1.27.2 按**录屏实测**重做为悬浮胶囊）。
  *
- * ── 外观（照抄 jm-comic-android 的 CompactBottomBar 逐项对齐）──────
- *   · 内容区高 **52dp**（M3 NavigationBar 默认 80dp，砍掉一大半指示器留白）
- *   · 图标 **22dp**、文字 **11sp**（字比图标小一档 —— 用户要「字比图标稍小」）
- *   · 选中/未选中**换字形**（Filled ↔ Outlined），不靠指示器动画
- *   · `indication = null` —— 零涟漪，零动画
- *   · 点击区 `weight(1f) + fillMaxHeight`，整条栏三等分，无空隙
+ * ── 尺寸来源 ───────────────────────────────────────────────────────
+ * 参考实现被加固（`dev.mocika.shield`），源码拿不到，所以改成**从录屏里量**。
+ * 用户录屏 576×1280 ↔ 真机 1080×2400（系数 0.625 px→dp，density=3）。实测：
  *
- * 偏离参考实现的两处（用户明确要求）：
- *   1. 竖排（图标在上、文字在下）。参考是横排，但横排时两者基线不齐，
- *      文字看着更小更歪 —— 这正是「字比图标稍小」总觉得不对的根源。
- *   2. 图标渐变着色。material3 的 `Icon(tint)` 只吃 `Color`，所以用
- *      `tint = Transparent` + `drawWithContent { drawRect(brush, SrcIn) }` 把渐变
- *      灌进图标形状，**不新增任何图片资源**。
+ * | 项 | 录屏像素 | 换算 |
+ * |---|---|---|
+ * | 胶囊高 | 90 | **56dp** |
+ * | 左/右边距 | 23.5 | **15dp** |
+ * | 距屏幕底 | 23 | **约 14dp**（浮在手势条上方） |
+ * | 图标 ink | 26×23 / 29×29 | **约 22~24dp** |
+ * | 文字单字 | 15~17 | **约 11sp** |
+ * | 图标↔文字间距 | 15 | **约 5dp** |
+ * | 三项中心 | x=112/288/466 | 等宽各 110dp |
  *
- * ── 收放（v1.27.1 重做）────────────────────────────────────────
- * ⚠️ v1.27.0 的做法是**错的**：它把栏高度从 52dp 动画到 0
- * （`.height(52f * expand)` + `clipToBounds`），于是整条栏连**点击区**一起变成 0 高 ——
- * 用户反馈「把导航栏搞小的点不了」。高度压 0 = 栏没了，只能靠上滑唤回，属于设计缺陷。
+ * ── 与 v1.27.0/1.27.1 的两处结构性修正 ─────────────────────────────
+ *  1. **通栏 → 悬浮胶囊**。原来是 `fillMaxWidth` 的白条贴屏幕底；
+ *     实测参考是**左右各留 15dp、大圆角、带阴影、浮在内容之上**的胶囊。
+ *  2. **竖排 → 横排**。实测参考是「图标 + 文字横排」。
+ *     （v1.27.0 我按「字比图标小」的诉求改成竖排，方向是错的 ——
+ *      参考本来就是横排，字只是比图标小一号。）
  *
- * 现在改成**整条栏向下平移滑出屏幕**：
- *   · 栏自身尺寸**恒定 52dp**，不存在「被压扁」的中间态；
- *   · 收起 = 平移出屏幕外，展开 = 滑回来，动画天然平滑；
- *   · 去掉 `clipToBounds`，图标不会被切一半。
- * 本组件不自己管收放，只暴露 [modifier]，由 [MainScaffold] 统一驱动。
+ * 配色也从「每个 Tab 一个渐变色」回到参考实现的**单色**：
+ * 选中 = `onSurface`（近黑，SemiBold），未选中 = `onSurfaceVariant`（灰）。
+ *
+ * ── 收放 ───────────────────────────────────────────────────────
+ * ⚠️ v1.27.0 用 `height(52dp × expand)` 把栏连**点击区**一起压成 0 高，
+ * 用户反馈「把导航栏搞小的点不了」；v1.27.1 改成整条平移滑出，修好了。
+ * 本版继续沿用**平移**：栏自身尺寸恒定，收起 = 平移出屏幕外。
+ * 本组件不管收放，只暴露 [modifier]，由 [MainScaffold] 统一驱动。
  */
 @Composable
 fun CompactTabBar(
@@ -401,87 +403,65 @@ fun CompactTabBar(
     nav: NavController,
     modifier: Modifier = Modifier,
 ) {
+    val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 15.dp, end = 15.dp, bottom = navBarBottom + 10.dp),
         color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(28.dp),
+        shadowElevation = 10.dp,
     ) {
-        Column(Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                    for (r in TopLevelRoute.values()) {
-                        val selected = currentRoute == r.route
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                ) {
-                                    if (!selected) {
-                                        // popUpTo 到**起始目的地**（书架）：用根图 id 会在当前页是
-                                        // 普通目的地时把整张返回栈清掉 → 点了没反应（v1.7.5 的教训）
-                                        nav.navigate(r.route) {
-                                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    }
-                                },
-                            contentAlignment = Alignment.Center,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (r in TopLevelRoute.values()) {
+                val selected = currentRoute == r.route
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
                         ) {
-                            // 竖排：图标在上、文字在下 —— 这是用户嫌「字比图标小」
-                            // 时真正的诉求来源（横排时两者基线不齐，字显得更小更歪）。
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
-                            ) {
-                                // 选中态用 `tint = Transparent` 把图标画成「空模」，
-                                // 再用 drawWithContent + SrcIn 把渐变**灌进图标形状**里。
-                                // （material3 的 Icon 只接受 Color 型 tint，
-                                //   要上渐变只能走后处理这一条路 —— 不新增任何图片资源。）
-                                // 未选中直接给灰 tint。
-                                if (selected) {
-                                    Icon(
-                                        imageVector = r.icon,
-                                        contentDescription = r.label,
-                                        tint = Color.Transparent,
-                                        modifier = Modifier
-                                            .size(22.dp)
-                                            .drawWithContent {
-                                                drawContent()
-                                                drawRect(
-                                                    brush = Brush.horizontalGradient(r.gradient),
-                                                    blendMode = BlendMode.SrcIn,
-                                                )
-                                            },
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = r.iconIdle,
-                                        contentDescription = r.label,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(22.dp),
-                                    )
+                            if (!selected) {
+                                // popUpTo 到**起始目的地**（书架）：用根图 id 会在当前页是
+                                // 普通目的地时把整张返回栈清掉 → 点了没反应（v1.7.5 的教训）
+                                nav.navigate(r.route) {
+                                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
                                 }
-                                Text(
-                                    text = r.label,
-                                    fontSize = 11.sp,
-                                    lineHeight = 13.sp,
-                                    color = if (selected) r.gradient.first() else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                )
                             }
-                        }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    // 横排：图标 + 文字（与参考实现一致）
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (selected) r.icon else r.iconIdle,
+                            contentDescription = r.label,
+                            tint = if (selected) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(
+                            text = r.label,
+                            fontSize = 11.sp,
+                            color = if (selected) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        )
                     }
                 }
-            // 系统导航栏安全区：始终保留，收起时也不让内容顶到小白条下面
-            Spacer(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
+            }
         }
     }
 }

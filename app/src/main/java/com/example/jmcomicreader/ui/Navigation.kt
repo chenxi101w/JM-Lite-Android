@@ -1,7 +1,6 @@
 ﻿package com.example.jmreader.ui
 
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmarks
@@ -79,26 +78,14 @@ enum class TopLevelRoute(
     /** 未选中态图标（线性）—— v1.22.1 起按参考实现的做法：选中/未选中换图标字形，
      *  这样「当前在哪一栏」不靠指示器动画也能一眼看出。 */
     val iconIdle: ImageVector,
-    /** 选中态图标/文字的渐变起止色（未选中统一用 onSurfaceVariant 灰）。
-     *  v1.27.0：用户嫌原来三色（琥珀/青/紫）太跳，统一成**相邻色相**的三组渐变，
-     *  视觉上是一套而不是三个色。 */
-    val gradient: List<Color>,
+    /** v1.27.2：去掉「每个 Tab 一个色」的方案。
+     *  实测参考实现（录屏量像素）的选中态是**纯黑图标 + 黑色加粗文字**，
+     *  未选中是灰色，没有任何渐变/背景药丸/指示器。跟随参考 -> 这里不再存颜色，
+     *  由 CompactTabBar 统一取 `onSurface`（黑）/`onSurfaceVariant`（灰）。 */
 ) {
-    LIBRARY(
-        Routes.LIBRARY, "书架",
-        Icons.Filled.Bookmarks, Icons.Outlined.Bookmarks,
-        listOf(Color(0xFFFF8A4C), Color(0xFFFFB877)),
-    ),
-    DISCOVER(
-        Routes.SEARCH, "搜索",
-        Icons.Filled.Search, Icons.Outlined.Search,
-        listOf(Color(0xFF22C1E0), Color(0xFF5EE7F5)),
-    ),
-    SETTINGS(
-        Routes.SETTINGS, "设置",
-        Icons.Filled.Settings, Icons.Outlined.Settings,
-        listOf(Color(0xFF7C6BF0), Color(0xFFA99BFF)),
-    ),
+    LIBRARY(Routes.LIBRARY, "书架", Icons.Filled.Bookmarks, Icons.Outlined.Bookmarks),
+    DISCOVER(Routes.SEARCH, "搜索", Icons.Filled.Search, Icons.Outlined.Search),
+    SETTINGS(Routes.SETTINGS, "设置", Icons.Filled.Settings, Icons.Outlined.Settings),
 }
 
 /**
