@@ -69,7 +69,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.draw.clipToBounds
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavController
 import kotlin.math.roundToInt
@@ -108,18 +107,25 @@ fun MainScaffold(
     fab: @Composable () -> Unit = {},
     content: @Composable (padding: androidx.compose.foundation.layout.PaddingValues) -> Unit
 ) {
-    // v1.27.0：底栏收放只挂在**书架 / 搜索**两个内容页（设置页与详情页常驻）
+    // v1.27.1：底栏收放只挂在**书架 / 搜索**两个内容页（设置页与详情页常驻）
     val barCollapsible = currentRoute == Routes.LIBRARY || currentRoute == Routes.SEARCH
-    // 底栏展开度（1=全展开，0=全收起）。声明在 Scaffold 之外，
-    // 因为 bottomBar 与 content 两个槽位都要读它。
-    val tabExpand = remember { Animatable(1f) }
+    // 底栏「滑出度」：0 = 完全可见，1 = 完全滑出屏幕下方。
+    // ⚠️ 用**平移**而不是改高度 —— v1.27.0 改高度把点击区也压成 0，导致点不了。
+    val tabHide = remember { Animatable(0f) }
     val tabDir = remember { mutableIntStateOf(0) }
     val outerScope = rememberCoroutineScope()
-    // 「刚进去时是拉起的」：切页（含 Tab 切换）一律复位成展开
+    // 「刚进去时是拉起的」：切页（含 Tab 切换）一律复位成完全可见
     LaunchedEffect(currentRoute) {
-        tabExpand.snapTo(1f)
+        tabHide.snapTo(0f)
         tabDir.intValue = 0
     }
+    // 底栏总高 = 52dp 内容区 + 系统导航栏安全区（内容要按这个值留底部空间，
+    // 否则收起后内容会被底栏挡住最后一截）
+    val tabBarHeight = 52.dp
+    val sysInsetsOuter = WindowInsets.systemBars.asPaddingValues()
+    val tabBarTotal = tabBarHeight + sysInsetsOuter.calculateBottomPadding()
+    val densityOuter = androidx.compose.ui.platform.LocalDensity.current
+    val tabBarTotalPx = with(densityOuter) { tabBarTotal.roundToPx() }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -164,48 +170,57 @@ fun MainScaffold(
                 }
             }
         },
-        bottomBar = {
-            CompactTabBar(
-                currentRoute, nav,
-                expand = if (barCollapsible) tabExpand.value else 1f,
-            )
-        },
+        // v1.27.1：底栏**不再走 bottomBar 槽位**。
+        // 原因：槽位高度一变，Scaffold 就把 content 的 padding 一起改 → 内容跳动；
+        // 而且「高度压 0」会让点击区消失。现在底栏改成内容层之上的**悬浮覆盖层**，
+        // 由内容层用固定底部留白避让，收放只是水平滑动，不动任何布局尺寸。
         floatingActionButton = fab
     ) { padding ->
         // ── v1.23.0：悬浮球随内容滚动收拉 ──────────────────────────────
-        // 下滑时缩到 0（完全收起，点不到），上滑立刻复原。
         // 用 nestedScroll 在**这一层**统一观察，不动每个页面的列表代码。
-        // v1.27.0：同一个连接器顺带驱动**底栏**收放（书架/搜索页），方向一致：
-        // 内容下滑 → 悬浮球与底栏一起收起；上滑 → 一起复原。
+        // v1.27.1：同一个连接器驱动**底栏**收放（书架/搜索页）。
+        //  ⚠️ v1.27.0 用「单帧 dy > 6px」判方向 —— 手指随便抖一下就满足，
+        //     底栏等于常驻收起状态，用户自然觉得「点不了」。现在改成**累积位移**
+        //     判方向：下滑累计 48px 才收，上滑累计 12px 就放回来。
+        //     48px ≈ 16dp（3x 屏），正常翻页轻松超过、手抖不会触发。
         val fabScale = remember { Animatable(1f) }
         val scrollDir = remember { mutableIntStateOf(0) }
         val scope = rememberCoroutineScope()
         val scrollConn = remember(barCollapsible) {
             object : NestedScrollConnection {
+                /** 方向切换后累积的位移（px），用来过滤手抖。 */
+                private var acc = 0f
+
                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                    val dy = consumed.y
-                    if (dy > 6f && scrollDir.intValue != 1) {
+                    acc += consumed.y
+                    if (acc > 48f && scrollDir.intValue != 1) {
                         scrollDir.intValue = 1
+                        acc = 0f
                         scope.launch { fabScale.animateTo(0f, tween(180)) }
+                        // 下滑 → 底栏整条滑出屏幕
                         if (barCollapsible && tabDir.intValue != 1) {
                             tabDir.intValue = 1
-                            outerScope.launch { tabExpand.animateTo(0f, tween(200)) }
+                            outerScope.launch { tabHide.animateTo(1f, tween(220)) }
                         }
-                    } else if (dy < -6f && scrollDir.intValue != -1) {
+                    } else if (acc < -12f && scrollDir.intValue != -1) {
                         scrollDir.intValue = -1
+                        acc = 0f
                         scope.launch { fabScale.animateTo(1f, tween(180)) }
+                        // 上滑 → 底栏滑回来（恢复门槛更低：想切页时蹭一下就回来）
                         if (barCollapsible && tabDir.intValue != -1) {
                             tabDir.intValue = -1
-                            outerScope.launch { tabExpand.animateTo(1f, tween(200)) }
+                            outerScope.launch { tabHide.animateTo(0f, tween(220)) }
                         }
                     }
                     return Offset.Zero
                 }
             }
         }
-        // padding 来自 Scaffold：top = TopAppBar 高度（含状态栏），bottom = NavigationBar 高度（含导航栏）
-        // 但由于我们设置了 contentWindowInsets=0，无 TopAppBar 时需自己补 statusBars.top，
-        // 否则内容会顶到状态栏下面、最上面点不到
+        // padding 来自 Scaffold：top = TopAppBar 高度（含状态栏）。
+        // 由于我们设置了 contentWindowInsets=0，无 TopAppBar 时需自己补 statusBars.top，
+        // 否则内容会顶到状态栏下面、最上面点不到。
+        // v1.27.1：底部留白改成**自己算的 tabBarTotal** —— 底栏已不在 bottomBar 槽位，
+        // Scaffold 给的 bottom padding 会是 0。这个值恒定，所以底栏滑动时内容不跳。
         val systemInsets = WindowInsets.systemBars.asPaddingValues()
         val merged = androidx.compose.foundation.layout.PaddingValues(
             start = padding.calculateStartPadding(LayoutDirection.Ltr) +
@@ -214,12 +229,27 @@ fun MainScaffold(
                 (if (!showTopBar) systemInsets.calculateTopPadding() else 0.dp),
             end = padding.calculateEndPadding(LayoutDirection.Ltr) +
                 systemInsets.calculateEndPadding(LayoutDirection.Ltr),
-            bottom = padding.calculateBottomPadding()
+            bottom = tabBarTotal
         )
         Box(Modifier.fillMaxSize().nestedScroll(scrollConn)) {
             Column(Modifier.fillMaxSize()) {
                 content(merged)
             }
+            // ── v1.27.1：底栏做悬浮覆盖层，整条上下平移实现收放 ──────────
+            // 平移量 = tabBarTotalPx × 滑出度，1 时整条在屏幕外。
+            // 平移不改变布局尺寸，所以不存在「被压扁点不了」的中间态；
+            // 滑出屏幕后自然点不到（那是不可见，不是可点区域错乱）。
+            CompactTabBar(
+                currentRoute, nav,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .offset {
+                        IntOffset(
+                            0,
+                            (tabBarTotalPx * (if (barCollapsible) tabHide.value else 0f)).roundToInt()
+                        )
+                    }
+            )
             // ── v2.1：可拖动的下载悬浮球（下载页自身隐藏）──────────
             // ⚠️ v2.1.1 修正：M3 Scaffold 的 content 是**全屏**的（edge-to-edge），
             // bottomBar 只是绘制在 content 之上、避让量通过 merged padding 另发。
@@ -338,55 +368,51 @@ fun topLevelRouteOf(route: String?): String {
 }
 
 /**
- * 极简底部导航栏（v1.22.1 抽出；v1.27.0 按参考实现重做外观 + 加上滑收放）。
+ * 底部导航栏（v1.22.1 抽出；v1.27.0 外观重做；v1.27.1 收放方式重做）。
  *
- * ── 为什么要照抄参考实现 ──────────────────────────────────────────
- * 用户原话：「三个导航键丑的不行，你学习一下人家行吗」。
- * 翻 `jm-comic-android` 的 `CompactBottomBar` 逐项对齐，得到下面这套尺寸：
+ * ── 外观（照抄 jm-comic-android 的 CompactBottomBar 逐项对齐）──────
  *   · 内容区高 **52dp**（M3 NavigationBar 默认 80dp，砍掉一大半指示器留白）
- *   · 图标 **22dp**、文字 **12sp**（字比图标小一档，正是用户要的「字比图标稍小」）
+ *   · 图标 **22dp**、文字 **11sp**（字比图标小一档 —— 用户要「字比图标稍小」）
  *   · 选中/未选中**换字形**（Filled ↔ Outlined），不靠指示器动画
  *   · `indication = null` —— 零涟漪，零动画
  *   · 点击区 `weight(1f) + fillMaxHeight`，整条栏三等分，无空隙
  *
- * 与参考实现的差别只有两处，都是用户明确要求的：
- *   1. 图标用 `Brush` 渐变着色（参考是单一 primary 色；用户说「可以用彩色但要好看，
- *      比如渐变」）。渐变通过 `colorFilter = ColorFilter.tint(brush)` 打在矢量上，
- *      **不需要**为每个 Tab 准备彩色图源。
- *   2. 参考实现的 `Label` 用 primary；我们按 Tab 取 `TopLevelRoute.gradient` 的深色端。
+ * 偏离参考实现的两处（用户明确要求）：
+ *   1. 竖排（图标在上、文字在下）。参考是横排，但横排时两者基线不齐，
+ *      文字看着更小更歪 —— 这正是「字比图标稍小」总觉得不对的根源。
+ *   2. 图标渐变着色。material3 的 `Icon(tint)` 只吃 `Color`，所以用
+ *      `tint = Transparent` + `drawWithContent { drawRect(brush, SrcIn) }` 把渐变
+ *      灌进图标形状，**不新增任何图片资源**。
  *
- * ── 收放 ───────────────────────────────────────────────────────
- * 需求：「刚进去时是拉起的，向下滑动漫画展示时收起来，上滑自动拉起」。
- * 用**真实高度动画**而不是 `graphicsLayer` 平移 —— 平移会在收起后留下一块
- * 空白高度、且点得到（与悬浮球同一个坑）。这里同样不跟手，只认方向、阈值 6px。
+ * ── 收放（v1.27.1 重做）────────────────────────────────────────
+ * ⚠️ v1.27.0 的做法是**错的**：它把栏高度从 52dp 动画到 0
+ * （`.height(52f * expand)` + `clipToBounds`），于是整条栏连**点击区**一起变成 0 高 ——
+ * 用户反馈「把导航栏搞小的点不了」。高度压 0 = 栏没了，只能靠上滑唤回，属于设计缺陷。
+ *
+ * 现在改成**整条栏向下平移滑出屏幕**：
+ *   · 栏自身尺寸**恒定 52dp**，不存在「被压扁」的中间态；
+ *   · 收起 = 平移出屏幕外，展开 = 滑回来，动画天然平滑；
+ *   · 去掉 `clipToBounds`，图标不会被切一半。
+ * 本组件不自己管收放，只暴露 [modifier]，由 [MainScaffold] 统一驱动。
  */
 @Composable
 fun CompactTabBar(
     currentRoute: String,
     nav: NavController,
-    /** v1.27.0：1=完全展开，0=完全收起。外部（MainScaffold 的 nestedScroll）驱动。 */
-    expand: Float = 1f,
+    modifier: Modifier = Modifier,
 ) {
-    val density = androidx.compose.ui.platform.LocalDensity.current
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 8.dp,
     ) {
         Column(Modifier.fillMaxWidth()) {
-            // 高度动画容器：clipToBounds 保证收起时里面的图标/文字被裁掉而不是溢出
-            Box(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(with(density) { (52f * expand).toDp() })
-                    .clipToBounds()
+                    .height(52.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
                     for (r in TopLevelRoute.values()) {
                         val selected = currentRoute == r.route
                         Box(
@@ -454,7 +480,6 @@ fun CompactTabBar(
                         }
                     }
                 }
-            }
             // 系统导航栏安全区：始终保留，收起时也不让内容顶到小白条下面
             Spacer(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
         }
