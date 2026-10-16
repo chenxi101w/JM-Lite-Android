@@ -4,10 +4,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmarks
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Bookmarks
-import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -83,8 +83,10 @@ enum class TopLevelRoute(
      *  未选中是灰色，没有任何渐变/背景药丸/指示器。跟随参考 -> 这里不再存颜色，
      *  由 CompactTabBar 统一取 `onSurface`（黑）/`onSurfaceVariant`（灰）。 */
 ) {
+    // v1.28.0：原「搜索」页升为「首页」并提到第一位（用户：「咱们搜索页改成首页（第一页）」）。
+    // 图标跟着语义走：搜索 -> 首页用 Home（与参考实现的「首页」一致）。
+    DISCOVER(Routes.SEARCH, "首页", Icons.Filled.Home, Icons.Outlined.Home),
     LIBRARY(Routes.LIBRARY, "书架", Icons.Filled.Bookmarks, Icons.Outlined.Bookmarks),
-    DISCOVER(Routes.SEARCH, "搜索", Icons.Filled.Search, Icons.Outlined.Search),
     SETTINGS(Routes.SETTINGS, "设置", Icons.Filled.Settings, Icons.Outlined.Settings),
 }
 
@@ -108,7 +110,7 @@ private fun androidx.compose.animation.AnimatedContentTransitionScope<androidx.n
     isTopLevelTab(initialState.destination.route) && isTopLevelTab(targetState.destination.route)
 
 @Composable
-fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY) {
+fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.SEARCH) {
     val nav = rememberNavController()
     // 搜索页 ViewModel 提升到 Activity 作用域：切底部导航时不被销毁，保留结果/输入/滚动位置。
     val searchVm: SearchViewModel = viewModel(factory = factory)
@@ -130,7 +132,7 @@ fun AppNavHost(factory: JmViewModelFactory, startRoute: String = Routes.LIBRARY)
     // 其余（进详情/阅读器/设置二级页）才走滑动。
     NavHost(
         navController = nav,
-        startDestination = startRoute.takeIf { it.isNotBlank() } ?: Routes.LIBRARY,
+        startDestination = startRoute.takeIf { it.isNotBlank() } ?: Routes.SEARCH,
         // v1.24.0：默认改成**淡入淡出**。原来默认就是横滑（层级下钻那套），
         // 结果连「详情 → 搜索结果」「点 Tab」这种平级跳转也横滑 —— 用户反馈
         //「切哪个都是左翻页」。按 M3 选型（见 Knowledge Base/Animation/03）：

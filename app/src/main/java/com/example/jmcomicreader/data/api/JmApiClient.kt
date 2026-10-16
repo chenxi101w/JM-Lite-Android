@@ -62,14 +62,19 @@ internal object JmApiClient {
      *
      * @return 命中结果（可能为空列表）；**接口不可用时返回 null**，调用方据此回退 Python 链路。
      */
-    suspend fun search(keyword: String, page: Int = 1): List<Book>? {
+    suspend fun search(keyword: String, page: Int = 1, order: String = "mr"): List<Book>? {
         if (keyword.isBlank()) return null
+        val params = LinkedHashMap<String, String>()
+        params["search_query"] = keyword
+        params["page"] = page.toString()
+        // v1.28.0：排序参数。JM 的 /search 支持 order=（mr 最新 / mv 最多观看 …）。
+        // ⚠️ 除 mr 外的取值**尚未在真机逐个验证**（原实现直接把非 mr 一律挡在门外）。
+        // 这里只在非默认值时带上，并由 BookLibrary 做「拿不到结果就回落 mr」的兜底 ——
+        // 即使接口不认这个枚举，用户也只会看到默认排序，而不是空列表。
+        if (order != "mr") params["order"] = order
         val json = request(
             path = "search",
-            params = mapOf(
-                "search_query" to keyword,
-                "page" to page.toString(),
-            )
+            params = params
         ) ?: return null
 
         // v1.1.5：纯数字（JM 号）查询时接口**不返回列表**，而是给出跳转目标：

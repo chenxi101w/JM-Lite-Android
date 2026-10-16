@@ -48,6 +48,21 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
     private val _searchBarBehavior = MutableStateFlow("stay")
     val searchBarBehavior: StateFlow<String> = _searchBarBehavior.asStateFlow()
 
+    /**
+     * v1.28.0：分类栏的两种模式（设置项 category_bar_behavior）。
+     *  - scroll：**随搜索栏一起收拉**（跟搜索栏同在可收放区里，一起隐藏/出现）
+     *  - stay：**常驻显示**（跟漫画列表一样一直在，不参与收放）
+     * 用户原话：「分类栏分两种设置可改，第一种是随搜索栏一起收拉，一种是跟漫画一样常驻」。
+     */
+    private val _categoryBarMode = MutableStateFlow("scroll")
+    val categoryBarMode: StateFlow<String> = _categoryBarMode.asStateFlow()
+    fun setCategoryBarMode(v: String) { _categoryBarMode.value = v }
+
+    /** v1.28.0：排序面板是否展开（点最右侧小按钮向下展开）。 */
+    private val _sortOptionsExpanded = MutableStateFlow(false)
+    val sortOptionsExpanded: StateFlow<Boolean> = _sortOptionsExpanded.asStateFlow()
+    fun setSortOptionsExpanded(v: Boolean) { _sortOptionsExpanded.value = v }
+
     // ── 搜索页 UI 状态（提升到 VM：切底部导航/配置变更时不丢失，对齐 PC 版保留搜索页）──
     private val _keyword = MutableStateFlow("")
     val keyword: StateFlow<String> = _keyword.asStateFlow()
@@ -258,6 +273,8 @@ class SearchViewModel(private val repo: JmRepository) : ViewModel() {
         viewModelScope.launch {
             _defaultSort.value = repo.getConfig("default_sort") ?: "mr"
             _searchBarBehavior.value = repo.getConfig("search_bar_behavior") ?: "stay"
+            // v1.28.0：分类栏模式（scroll 随搜索栏收放 / stay 常驻）
+            _categoryBarMode.value = repo.getConfig("category_bar_behavior") ?: "scroll"
             _hideMode.value = repo.getConfig("hide_downloaded_in_search") ?: "hide"
             _hideFinishedMode.value = repo.getConfig("hide_finished_in_search") ?: "hide"
         }

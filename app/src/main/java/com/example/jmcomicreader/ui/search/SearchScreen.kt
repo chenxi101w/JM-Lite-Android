@@ -1,6 +1,18 @@
 ﻿package com.example.jmreader.ui.search
 
 import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -12,10 +24,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,7 +38,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -78,6 +88,10 @@ fun SearchBody(
     // v1.2.0：区分「还没搜过」与「正在搜」——
     // VM 的初始 state 就是 UiState.Loading，此前一进搜索页就无谓地转圈（用户反馈）。
     val searched by vm.searched.collectAsState()
+    // v1.28.0：首页改版新增
+    val categoryBarMode by vm.categoryBarMode.collectAsState()
+    val orderBy by vm.orderBy.collectAsState()
+    val sortOptionsExpanded by vm.sortOptionsExpanded.collectAsState()
 
     // v1.1.8：搜索后收起输入法。
     // 两版尝试的经验（真机实测）：
@@ -139,25 +153,47 @@ fun SearchBody(
         }
     }
 
-    // ── v1.25.0：搜索栏随滚动收放 ──────────────────────────────────
-    // 需求：「搜索页的搜索栏改成跟人家一样，上滑一下就自动出来」。
-    // 与底部栏/悬浮球同一套做法：内容下滑 → 收起，上滑 → 展开（只认方向、不跟手）。
-    // 用**真实高度动画**（外层 Box 裁切）而不是 graphicsLayer 平移 —— 平移会在收起后
-    // 留下一块空白高度，看起来像「上面少了一块」。网格是 weight(1f)，
-    // 搜索栏收起时它自动填满，视觉上就是内容长大一格。
-    // 收起盒子里装的是「搜索框 + 分类 chip 行」
+    // ── v1.28.0：顶部区域整体重做（iOS 风格）─────────────────────────
+    // 用户原话（这条需求曾因进程崩溃丢失，现已落盘 docs/需求/20261016_首页改版.md）：
+    //   「加上分类搜索功能…咱们搞成一行，最新/最多喜欢/总排名/月排名/周排名等搞成
+    //     一个小按钮放这一行最右边，搞成点一下就向下展开那种」
+    //   「别再搞点搜索就蓝边的那种垃圾动画了…无感式跟界面融一起的设计很 ios」
+    //   「分类栏分两种设置可改：①随搜索栏一起收拉 ②跟漫画一样常驻」
     //
-    // ⚠️ v1.27.0 修 bug「搜索框点不了」：原来这里用的是 **Box**（层叠布局）。
-    // Box 的子元素默认都摆到 TopStart，而 LazyRow 没有高度约束 ——
-    // 在 98dp 高的 Box 里它会被量成 98dp、并且**画在 OutlinedTextField 之上**，
-    // 于是一整条 32dp 的 chip 行横跨搜索框，点击全被它吃掉（真机反馈）。
-    // 现在改成 **Column**（顺序排布、不重叠）+ chip 行显式高度，搜索框恢复可点。
-    val barDp = if (homeCategories.isEmpty()) 52f else 90f
-    val barHeight = remember { Animatable(barDp) }
+    // 结构：
+    //   [可收放区] iOS 胶囊搜索栏
+    //              └─（mode=scroll 时）分类行：一行 = chips + 最右「排序」小按钮
+    //                                    └─ 排序面板（点按钮向下展开）
+    //   [常驻区]   （mode=stay 时）分类行 + 排序面板
+    //   [内容]     结果网格
+    //
+    // 为什么这里能用**高度动画**收放（而底栏当年不行）：
+    //   顶栏收起后下方网格是 weight(1f) 会自动填满，视觉上就是"内容长大一格"；
+    //   不存在底栏那种「点击区被压成 0 却还停在原位」的问题（v1.27.0 的坑）。
+    //
+    // ⚠️ 分类行里 LazyRow 必须显式给 height —— 在 Row 中即使给了 weight(1f)，
+    //    不给高度也会被量满并可能盖住兄弟节点吃掉点击（v1.27.0 搜索框 bug 同源）。
+    val catInCollapsible = categoryBarMode != "stay"
+    val sortOpts = listOf(
+        "mr" to "最新",
+        "mv" to "最多喜欢",
+        "md" to "总排名",
+        "mv_m" to "月排名",
+        "mv_w" to "周排名",
+    )
+    val sortLabel = sortOpts.firstOrNull { it.first == orderBy }?.second ?: "最新"
+
+    val SEARCH_ROW = 46f
+    val CAT_ROW = 42f
+    val PANEL_ROW = 44f
+    val expandedDp = SEARCH_ROW +
+        (if (catInCollapsible) CAT_ROW + (if (sortOptionsExpanded) PANEL_ROW else 0f) else 0f)
+
+    val barHeight = remember { Animatable(expandedDp) }
     val barDir = remember { mutableIntStateOf(0) }
     // 无结果时强制常驻（没东西可滚，藏起来等于把搜索入口也弄没了）
     val forceShow = (state as? UiState.Success)?.data?.isNotEmpty() == false
-    val barConn = remember(forceShow) {
+    val barConn = remember(forceShow, expandedDp) {
         object : NestedScrollConnection {
             override fun onPostScroll(
                 consumed: Offset, available: Offset, source: NestedScrollSource
@@ -166,17 +202,31 @@ fun SearchBody(
                 val dy = consumed.y
                 if (dy > 6f && barDir.intValue != 1) {
                     barDir.intValue = 1
+                    // 收起时顺手收起排序面板，否则展开态会一直挂着
+                    if (sortOptionsExpanded) vm.setSortOptionsExpanded(false)
                     scope.launch { barHeight.animateTo(0f, tween(180)) }
                 } else if (dy < -6f && barDir.intValue != -1) {
                     barDir.intValue = -1
-                    scope.launch { barHeight.animateTo(barDp, tween(180)) }
+                    scope.launch { barHeight.animateTo(expandedDp, tween(180)) }
                 }
                 return Offset.Zero      // ⚠️ 不消费，列表照常滚
             }
         }
     }
-    LaunchedEffect(forceShow) {
-        if (forceShow && barHeight.value != barDp) barHeight.animateTo(barDp, tween(180))
+    // 排序面板开合 / 分类栏模式变化 → 重算高度。
+    // 「点一下向下展开」的动画就是这里：面板高度记进 expandedDp，
+    // 外层 Box 高度从 A 动画到 A+PANEL_ROW，配合 clipToBounds 就是向下展开。
+    LaunchedEffect(expandedDp, forceShow) {
+        if (forceShow || barDir.intValue != 1) barHeight.animateTo(expandedDp, tween(180))
+    }
+
+    // 统一动作：用关键词发起一次搜索 + 收键盘 + 回到顶部
+    val runSearch: (String) -> Unit = { kw ->
+        vm.setKeyword(kw)
+        vm.onSearch()
+        pendingHide = true
+        hideIme()
+        scope.launch { gridState.requestScrollToItem(0) }
     }
 
     Column(
@@ -185,9 +235,7 @@ fun SearchBody(
             .fillMaxSize()
             .nestedScroll(barConn)
     ) {
-        // 搜索输入框（回车即搜）
-        // v1.1.9：去掉浮动 label（"搜索关键词（标题 / 标签）"这行小字），
-        // 改用占位提示 + 压缩高度 + 胶囊圆角 —— 顶部不再显厚重，输入后文字自动消失。
+        // ① 可收放区：搜索栏（含 scroll 模式下的分类行 + 排序面板）
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -195,80 +243,77 @@ fun SearchBody(
                 .clipToBounds()
         ) {
             Column(Modifier.fillMaxWidth()) {
-        OutlinedTextField(
-            value = keyword,
-            onValueChange = { vm.setKeyword(it) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-            placeholder = {
-                Text(
-                    "搜索关键词",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                IosSearchField(
+                    value = keyword,
+                    onValueChange = { vm.setKeyword(it) },
+                    onSearch = { kw ->
+                        val t = kw.trim()
+                        if (t.isNotBlank()) runSearch(t)
+                    },
                 )
-            },
-            leadingIcon = {
-                Icon(
-                    Icons.Filled.Search,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp)
-                )
-            },
-            textStyle = MaterialTheme.typography.bodyMedium,
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(26.dp),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                onSearch = {
-                    val kw = keyword.trim()
-                    if (kw.isBlank()) return@KeyboardActions
-                    vm.setKeyword(kw)
-                    // v1.3.2：onSearch() 内部已按当前条件调用 search() 真正发起抓取，
-                    // 此处**不可**再调 vm.search(kw, "keyword") ——
-                    // 那会造成两次并发搜索，`searchJob?.cancel()` 互相打断，
-                    // 其中一次失败 → 页面顶部闪出一行红色「搜索失败」后又显示结果。
-                    vm.onSearch()
-                    // v1.1.8：立刻收起输入法，让结果区域占满视野
-                    // （另置 pendingHide：结果返回后再收一次，覆盖异步路径）
-                    pendingHide = true
-                    hideIme()
-                    scope.launch { gridState.requestScrollToItem(0) }
-                }
-            )
-        )
-
-        // ── 分类快捷入口：分类就是关键词，点一下直接用该词搜索 ──
-        // ⚠️ 显式高度 32dp：不给高度的话 LazyRow 在剩余空间里会被量高，
-        //    视觉上 chip 行会离搜索框过远（v1.26.0 的观感问题）。
-        if (homeCategories.isNotEmpty()) {
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(38.dp)
-                    .padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 2.dp),
-            ) {
-                items(homeCategories) { cat ->
-                    FilterChip(
-                        selected = keyword.trim() == cat,
-                        onClick = {
-                            if (keyword.trim() == cat) return@FilterChip   // 已选中则不重复搜
-                            vm.setKeyword(cat)
-                            vm.onSearch()
-                            pendingHide = true
-                            hideIme()
-                            scope.launch { gridState.requestScrollToItem(0) }
+                if (catInCollapsible) {
+                    CategoryFilterRow(
+                        categories = homeCategories,
+                        keyword = keyword,
+                        onPick = { cat ->
+                            if (cat.isBlank()) vm.setKeyword("")   // 「全部」= 清空筛选
+                            else if (keyword.trim() != cat) runSearch(cat)
                         },
-                        label = { Text(cat, style = MaterialTheme.typography.labelMedium) },
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                        sortLabel = sortLabel,
+                        sortOpen = sortOptionsExpanded,
+                        onToggleSort = { vm.setSortOptionsExpanded(!sortOptionsExpanded) },
                     )
+                    if (sortOptionsExpanded) {
+                        SortPanel(
+                            options = sortOpts,
+                            current = orderBy,
+                            onPick = { v ->
+                                vm.setSortOptionsExpanded(false)
+                                if (orderBy != v) {
+                                    vm.setOrderBy(v)
+                                    if (searched && keyword.isNotBlank()) {
+                                        vm.onSearch()
+                                        scope.launch { gridState.requestScrollToItem(0) }
+                                    }
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
-            }   // ← Column 结束
-        }   // ← 顶部收放区（搜索框 + 分类）高度动画 Box 结束
+
+        // ② 常驻区：分类栏 mode=stay 时，分类行与排序面板不参与收放
+        if (!catInCollapsible) {
+            CategoryFilterRow(
+                categories = homeCategories,
+                keyword = keyword,
+                onPick = { cat ->
+                    if (cat.isBlank()) vm.setKeyword("")
+                    else if (keyword.trim() != cat) runSearch(cat)
+                },
+                sortLabel = sortLabel,
+                sortOpen = sortOptionsExpanded,
+                onToggleSort = { vm.setSortOptionsExpanded(!sortOptionsExpanded) },
+            )
+            if (sortOptionsExpanded) {
+                SortPanel(
+                    options = sortOpts,
+                    current = orderBy,
+                    onPick = { v ->
+                        vm.setSortOptionsExpanded(false)
+                        if (orderBy != v) {
+                            vm.setOrderBy(v)
+                            if (searched && keyword.isNotBlank()) {
+                                vm.onSearch()
+                                scope.launch { gridState.requestScrollToItem(0) }
+                            }
+                        }
+                    },
+                )
+            }
+        }
+
 
         // 未搜索过：显示引导空态（而不是转圈）
         if (!searched) {
@@ -338,6 +383,200 @@ fun SearchBody(
                     }
                 }
             )
+        }
+    }
+}
+// ── v1.28.0 新增组件：iOS 风顶部区 ──────────────────────────────────
+
+/**
+ * iOS 风搜索栏。
+ *
+ * 为什么不用 `OutlinedTextField`：M3 的 OutlinedTextField 在获得焦点时会给一圈
+ * **主题色描边**（默认蓝紫），用户原话「别再搞点搜索就蓝边的那种垃圾动画了」。
+ * 这里改用 [BasicTextField] + 自绘 `decorationBox`：
+ *   · 无描边、无 divider、无浮动 label；
+ *   · 浅灰填充胶囊（`onSurface` 6% 透明度），与页面背景融合 —— iOS / Telegram 的做法；
+ *   · 聚焦时**只有光标在闪**，不再有任何边框动画（"无感式"）；
+ *   · 有内容时右侧出现清空按钮（iOS 习惯）。
+ * 高度 46dp，其中胶囊本体 36dp（上下各 5dp 留白）。
+ */
+@Composable
+private fun IosSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSearch: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(46.dp)
+            .padding(horizontal = 16.dp, vertical = 5.dp),
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium.copy(
+            color = MaterialTheme.colorScheme.onSurface
+        ),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { onSearch(value) }),
+        decorationBox = { inner ->
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Search,
+                    contentDescription = null,
+                    modifier = Modifier.size(17.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                )
+                Spacer(Modifier.width(7.dp))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(
+                            "搜索关键词",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        )
+                    }
+                    inner()
+                }
+                if (value.isNotEmpty()) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "清空",
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clip(CircleShape)
+                            .clickable { onValueChange("") },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+            }
+        },
+    )
+}
+
+/**
+ * 分类行：**只有一行** = 分类 chip（横向滚动） + 最右侧「排序」小按钮。
+ * 用户要求把「最新/最多喜欢/总排名/月排名/周排名」收进这一行最右边的小按钮里，
+ * 点一下**向下展开**（展开由调用方的 [SortPanel] + 高度动画完成）。
+ */
+@Composable
+private fun CategoryFilterRow(
+    categories: List<String>,
+    keyword: String,
+    onPick: (String) -> Unit,
+    sortLabel: String,
+    sortOpen: Boolean,
+    onToggleSort: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .padding(start = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // ⚠️ 显式 height：Row 内的 LazyRow 不给高度会被量满并吃掉兄弟节点点击
+        LazyRow(
+            modifier = Modifier
+                .weight(1f)
+                .height(32.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 「全部」= 不过滤。「推荐」默认列表待接口支持（用户说"这个以后再说"）
+            item { IosChip("全部", selected = keyword.isBlank()) { onPick("") } }
+            items(categories.size) { i ->
+                val cat = categories[i]
+                IosChip(cat, selected = keyword.trim() == cat) { onPick(cat) }
+            }
+        }
+        SortButton(sortLabel, sortOpen, onToggleSort)
+    }
+}
+
+/** iOS 风胶囊 chip：无边框、无描边；未选中浅灰底，选中深色底 + 反白字。 */
+@Composable
+private fun IosChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .height(30.dp)
+            .clip(RoundedCornerShape(50))
+            .background(
+                if (selected) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) MaterialTheme.colorScheme.surface
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** 最右侧的「排序」小按钮：显示当前排序 + 上下箭头，点一下切换展开。 */
+@Composable
+private fun SortButton(label: String, open: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(start = 8.dp, end = 16.dp)
+            .height(30.dp)
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+            .clickable(onClick = onClick)
+            .padding(start = 10.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.width(3.dp))
+        Icon(
+            imageVector = if (open) Icons.Filled.KeyboardArrowUp
+            else Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            modifier = Modifier.size(15.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** 向下展开的排序面板（横向可滚，避免小屏挤爆）。 */
+@Composable
+private fun SortPanel(
+    options: List<Pair<String, String>>,
+    current: String,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyRow(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .padding(start = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(end = 16.dp),
+    ) {
+        items(options.size) { i ->
+            val (value, label) = options[i]
+            IosChip(label, selected = current == value) { onPick(value) }
         }
     }
 }

@@ -45,6 +45,14 @@ class BookLibrary(
     // ── 在线抓取 ──────────────────────────────────────────────
 
     /**
+     * v1.28.0：允许透传给接口的排序枚举白名单。
+     * mr 最新 / mv 最多观看（≈最多喜欢） / mp 最多图片 / tr 标题
+     * md 总排名 / mv_m 月排名 / mv_w 周排名 —— 后三个取值**待真机验证**，
+     * 验证方式是搜一次看日志：若出现「order=xx 无结果，回落 mr 重试」即说明接口不认。
+     */
+    private val SUPPORTED_ORDERS = setOf("mr", "mv", "mp", "tr", "md", "mv_m", "mv_w")
+
+    /**
      * 搜索漫画。
      * mode: keyword | author | tags | combined | jmid
      * orderBy 取值：mr 最新 / mv 浏览 / mp 收藏 / tr 标题；time 取值：a 全部 / t 今天 / w 本周 / m 本月
@@ -61,17 +69,26 @@ class BookLibrary(
         tagsJson: String = "",
     ): List<Book> {
         // v1.4.0：Chaquopy 已移除 → 纯原生。
-        // 只支持「纯关键词」这一档（与原先 JmRepository 的 USE_API_SEARCH 条件一致）：
-        // 排序 orderBy / 时间 time / 标签 tagsJson 的接口参数枚举未逐一验证，走 jmcomic HTML 才行。
-        if (mode != "keyword" || tagsJson.isNotBlank() || orderBy != "mr" || time != "a") {
+        // 只支持「纯关键词」这一档：时间 time 与标签 tagsJson 的接口参数枚举未逐一验证。
+        // v1.28.0：**放开 orderBy**。首页新增排序按钮（最新/最多喜欢/总排名/月排名/周排名），
+        // 不再只放行 mr；取值合法性交给下面的「回落」兜底，而不是在这里一刀切拒掉。
+        if (mode != "keyword" || tagsJson.isNotBlank() || time != "a" || orderBy !in SUPPORTED_ORDERS) {
             Log.w(
                 "BookLibrary",
                 "搜索条件暂不支持（mode=$mode orderBy=$orderBy time=$time 有标签=${tagsJson.isNotBlank()}）"
             )
             return emptyList()
         }
-        val books = JmApiClient.search(keyword, page)
+        val books = JmApiClient.search(keyword, page, orderBy)
         if (books.isNullOrEmpty()) {
+            // v1.28.0：非默认排序**回落**。order 的取值没有在真机逐个验证过，
+            // 若接口不认这个枚举 → 返回空 → 用 mr 再试一次。
+            // 这样最坏情况只是"排序没生效"，绝不会变成"搜不出东西"。
+            if (orderBy != "mr") {
+                Log.w("BookLibrary", "order=$orderBy 无结果，回落 mr 重试：$keyword")
+                val fallback = JmApiClient.search(keyword, page, "mr")
+                if (!fallback.isNullOrEmpty()) return fallback
+            }
             Log.w("BookLibrary", "原生搜索无结果：$keyword")
             return emptyList()
         }

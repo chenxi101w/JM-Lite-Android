@@ -183,6 +183,11 @@ fun SettingsGroupScreen(group: String, nav: NavController, factory: JmViewModelF
                                 listOf("hide" to "输入时隐藏", "keep" to "保持显示"),
                                 cfg["search_bar_behavior"] ?: "hide") { vm.set("search_bar_behavior", it) }
                             Divider()
+                            // v1.28.0：分类栏两种模式（用户要求「分两种设置可改」）
+                            ChipRow("分类栏",
+                                listOf("scroll" to "随搜索栏收放", "stay" to "常驻显示"),
+                                cfg["category_bar_behavior"] ?: "scroll") { vm.set("category_bar_behavior", it) }
+                            Divider()
                             ChipRow("结果列数",
                                 listOf("0" to "自适应", "2" to "2 列", "3" to "3 列", "4" to "4 列"),
                                 cfg["search_columns"] ?: "0") { vm.set("search_columns", it) }
